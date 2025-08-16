@@ -11,7 +11,7 @@ export interface Env {
 
 type DeathEntry = {
   name: string;
-  wiki_path: string; // e.g. "/wiki/Brandon_Blackstock"
+  wiki_path: string;
   age: number | null;
   description: string | null;
   cause: string | null;
