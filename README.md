@@ -1,4 +1,6 @@
-<img src="public/Celebrity-Death-Bot.png" alt="Project Logo" width="50%" />
+<p align="center">
+  <img src="public/Celebrity-Death-Bot.png" alt="Project Logo" width="50%" />
+</p>
 
 # Celebrity Death Bot
 
