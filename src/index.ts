@@ -238,7 +238,7 @@ async function runJob(env: Env) {
 
 /** Replicate webhook handler: parse output and notify via Telegram. */
 async function handleReplicateCallback(req: Request, env: Env): Promise<Response> {
-  // Optional secret check
+  // Optional secret check via ?secret=... on the webhook URL you registered with Replicate
   if (env.REPLICATE_WEBHOOK_SECRET) {
     const url = new URL(req.url);
     const s = url.searchParams.get("secret");
@@ -254,64 +254,135 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
     return new Response("Invalid JSON", { status: 400 });
   }
 
-  // Replicate "prediction" payload typically includes output and status
-  // Output schema (per prompt/model) is "array of strings" (iterator/concatenate) OR a single string.
+  // Only act on succeeded predictions
+  if ((payload?.status ?? "").toLowerCase() !== "succeeded") {
+    return Response.json({ ok: true, message: `Ignored status=${payload?.status ?? "unknown"}` });
+  }
+
+  // Replicate "prediction" payload includes output that may be:
+  // - a single string; or
+  // - an array of token strings (as in your example).
   const rawOutput = payload?.output;
 
-  // Coalesce into a single string.
-  const joined =
-    typeof rawOutput === "string"
-      ? rawOutput
-      : Array.isArray(rawOutput)
-      ? rawOutput.join("")
-      : "";
-
+  const joined = coalesceOutput(rawOutput).trim();
   if (!joined) {
-    // Nothing to do
     return Response.json({ ok: true, message: "No output" });
   }
 
-  // We asked the model to return JSON (either [] or {} when empty).
-  let parsed: any;
-  try {
-    parsed = JSON.parse(joined);
-  } catch (e) {
-    // If bad JSON, just ignore quietly (or log)
-    console.warn("Callback received non-JSON output:", joined);
+  // Try to parse JSON. If the model added code fences or stray text,
+  // extract the JSON substring between the first {..} or [..].
+  const parsed = extractAndParseJSON(joined);
+  if (parsed == null) {
+    console.warn("Callback received non-JSON output:", joined.slice(0, 500));
     return Response.json({ ok: true, message: "Non-JSON output ignored" });
   }
 
-  // Normalize to an array of items with expected fields
-  const items: Array<{
-    name?: string;
-    age?: number | string;
-    description?: string;
-    ["cause of death"]?: string;
-    cause?: string; // tolerate if model returns 'cause' instead
-  }> = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object"
-    ? // If they returned an empty object, do nothing.
-      []
-    : [];
+  // Normalize to an array of items
+  const items: Array<Record<string, unknown>> = normalizeToArray(parsed);
 
-  for (const it of items) {
-    const name = (it.name ?? "").toString().trim();
-    const age = (it.age ?? "").toString().trim();
-    const desc = (it.description ?? "").toString().trim();
-    const cause =
-      (it["cause of death"] ?? it.cause ?? "").toString().trim();
-
-    if (!name) continue;
-
-    const msg = `Celebrity death: ${name}${age ? ` (${age})` : ""} : ${desc}${
-      cause ? ` - ${cause}` : ""
-    }`;
-
-    await notifyTelegram(env, msg);
+  // Nothing to notify on empty object `{}` or empty array `[]`
+  if (!items.length) {
+    return Response.json({ ok: true, notified: 0 });
   }
 
-  return Response.json({ ok: true, notified: items.length });
+  // Build and send notifications
+  let notified = 0;
+  for (const it of items) {
+    const name = toStr(it["name"]);
+    if (!name) continue;
+
+    const age = toStr(it["age"]);
+    const desc = toStr(it["description"]);
+    const cause = toStr(
+      it["cause of death"] ??
+      it["cause_of_death"] ??
+      (it as any).causeOfDeath ??
+      it["cause"]
+    );
+
+    const msg =
+      `Celebrity death: ${name}` +
+      (age ? ` (${age})` : "") +
+      (desc ? ` : ${desc}` : "") +
+      (cause ? ` - ${cause}` : "");
+
+    await notifyTelegram(env, msg);
+    notified++;
+  }
+
+  return Response.json({ ok: true, notified });
+
+  // ---------- helpers ----------
+
+  // Coalesce string or nested array-of-strings into one string
+  function coalesceOutput(raw: unknown): string {
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return flattenStrings(raw).join("");
+    return "";
+  }
+
+  function flattenStrings(x: unknown): string[] {
+    if (typeof x === "string") return [x];
+    if (Array.isArray(x)) {
+      const out: string[] = [];
+      for (const el of x) out.push(...flattenStrings(el));
+      return out;
+    }
+    return [];
+  }
+
+  // Parse JSON from a possibly wrapped string (code fences or leading/trailing text)
+  function extractAndParseJSON(s: string): any | null {
+    const trimmed = stripCodeFences(s).trim();
+
+    // Try direct parse first
+    try { return JSON.parse(trimmed); } catch {}
+
+    // Try object slice
+    const objStart = trimmed.indexOf("{");
+    const objEnd = trimmed.lastIndexOf("}");
+    if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+      const slice = trimmed.slice(objStart, objEnd + 1);
+      try { return JSON.parse(slice); } catch {}
+    }
+
+    // Try array slice
+    const arrStart = trimmed.indexOf("[");
+    const arrEnd = trimmed.lastIndexOf("]");
+    if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
+      const slice = trimmed.slice(arrStart, arrEnd + 1);
+      try { return JSON.parse(slice); } catch {}
+    }
+
+    return null;
+  }
+
+  function stripCodeFences(s: string): string {
+    // Remove ```...``` wrappers if present
+    const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
+    const m = s.match(fence);
+    return m ? m[1] : s;
+  }
+
+  function normalizeToArray(parsed: any): Array<Record<string, unknown>> {
+    if (Array.isArray(parsed)) return parsed.filter(isObject);
+    if (isObject(parsed)) {
+      // Treat {} as empty; otherwise wrap single object
+      return Object.keys(parsed).length ? [parsed] : [];
+    }
+    return [];
+  }
+
+  function isObject(x: any): x is Record<string, unknown> {
+    return !!x && typeof x === "object" && !Array.isArray(x);
+  }
+
+  function toStr(v: unknown): string {
+    if (v == null) return "";
+    // Avoid "null"/"undefined" strings
+    const s = String(v).trim();
+    return s === "null" || s === "undefined" ? "" : s;
+  }
 }
 
 /** Router */
