@@ -301,10 +301,10 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
     );
 
     const msg =
-      `Celebrity death: ${name}` +
+      `🚨💀${name}` +
       (age ? ` (${age})` : "") +
       (desc ? ` : ${desc}` : "") +
-      (cause ? ` - ${cause}` : "");
+      (cause ? ` - ${cause}` : "") + `💀🚨`;
 
     await notifyTelegram(env, msg);
     notified++;
