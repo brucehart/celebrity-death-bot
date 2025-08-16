@@ -162,7 +162,7 @@ async function callReplicate(env: Env, prompt: string) {
         "Return only valid JSON or an empty JSON object as instructed. No extra commentary.",
       verbosity: "low",
       reasoning_effort: "minimal",
-      max_completion_tokens: 800,
+      max_completion_tokens: 4096,
     },
     webhook: env.REPLICATE_WEBHOOK_SECRET
       ? `${env.BASE_URL}/replicate/callback?secret=${encodeURIComponent(
