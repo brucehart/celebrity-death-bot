@@ -1,3 +1,4 @@
+![Project Logo](public/Celebrity-Death-Bot.png)
 # Celebrity Death Bot
 
 Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger. It checks the latest Wikipedia page of notable deaths for the current year and notifies subscribed users when a new entry appears.
