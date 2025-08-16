@@ -29,17 +29,8 @@
   },
 
   // Optional but nice for debugging in the dashboard
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
 
-  /**
-   * Secrets (set via CLI, not here):
-   *   wrangler secret put REPLICATE_API_TOKEN
-   *   wrangler secret put TELEGRAM_BOT_TOKEN
-   *   wrangler secret put REPLICATE_WEBHOOK_SECRET
-   *
-   * Optional additions:
-   * // "routes": [{ "pattern": "example.com/*", "zone_id": "<zone-id>" }]
-   * // "placement": { "mode": "smart" }
-   * // "assets": { "directory": "./public/", "binding": "ASSETS" }
-   */
+  "assets": { "directory": "./public", "binding": "ASSETS" }
+
 }
