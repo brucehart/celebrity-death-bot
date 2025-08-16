@@ -426,6 +426,10 @@ export default {
       }
     }
 
+    if (pathname === "/privacy" && request.method === "GET") {
+      return fetch(new URL("../public/privacy.html", import.meta.url));
+    }
+
     if (pathname === "/health") {
       return new Response("ok");
     }
