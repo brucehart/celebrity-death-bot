@@ -9,7 +9,7 @@
   "compatibility_date": "2025-08-13",
 
   // Run daily at 14:00 UTC (adjust as needed)
-  //"triggers": { "crons": ["0 14 * * *"] },
+  "triggers": { "crons": ["5 * * * *"] },
 
   // D1 binding
   "d1_databases": [
