@@ -96,21 +96,6 @@ function parseWikipedia(html: string): DeathEntry[] {
   return results;
 }
 
-/** Ensure D1 schema exists. */
-async function ensureSchema(env: Env) {
-  await env.DB.exec(`
-    CREATE TABLE IF NOT EXISTS deaths (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      wiki_path TEXT NOT NULL UNIQUE,
-      age INTEGER,
-      description TEXT,
-      cause TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-}
-
 /** Insert if not exists (by wiki_path). Returns true if inserted. */
 async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
   const exists = await env.DB.prepare(
@@ -214,8 +199,6 @@ async function notifyTelegram(env: Env, text: string) {
 
 /** The core cron job: scrape, parse, insert new rows, call Replicate if any. */
 async function runJob(env: Env) {
-  await ensureSchema(env);
-
   const year = toNYYear();
   const targetUrl = `https://en.wikipedia.org/wiki/Deaths_in_${year}`;
   const res = await fetch(targetUrl, {
