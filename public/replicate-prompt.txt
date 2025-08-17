@@ -1,0 +1,1 @@
+Extract from this list any names that an American might know. Include NFL, NBA, and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials. Structure the result as a JSON file with fields "name", "age", "description" and "cause of death". If no matches are found, return an empty Json structure with no fields.
