@@ -3,6 +3,7 @@ export interface Env {
   ASSETS: Fetcher;
 
   // Secrets / Vars
+  ASSETS: { fetch: typeof fetch };
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_IDS: string; // comma-separated chat IDs: "111,222,333"
@@ -119,7 +120,10 @@ async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
 }
 
 /** Build the Replicate prompt with the exact wording from the user. */
-function buildReplicatePrompt(newEntries: DeathEntry[]): string {
+async function buildReplicatePrompt(env: Env, newEntries: DeathEntry[]): Promise<string> {
+  const basePromptRes = await env.ASSETS.fetch("replicate-prompt.txt");
+  const basePrompt = (await basePromptRes.text()).trim();
+
   const lines = newEntries.map((e) => {
     const parts = [
       e.name,
@@ -131,12 +135,7 @@ function buildReplicatePrompt(newEntries: DeathEntry[]): string {
     return parts.filter(Boolean).join(", ");
   });
 
-  return [
-    `Extract from this list any names that an American might know. Include NFL, NBA, and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials. Structure the result as a JSON file with fields "name", "age", "description" and "cause of death". If no matches are found, return an empty Json structure with no fields.`,
-    `---`,
-    lines.join("\n"),
-    `----`,
-  ].join("\n\n");
+  return [basePrompt, `---`, lines.join("\n"), `----`].join("\n\n");
 }
 
 /** Trigger a Replicate prediction with webhook callback. */
@@ -228,7 +227,7 @@ async function runJob(env: Env) {
 
   // If any new entries, evaluate via Replicate
   if (newOnes.length > 0) {
-    const prompt = buildReplicatePrompt(newOnes);
+    const prompt = await buildReplicatePrompt(env, newOnes);
     await callReplicate(env, prompt);
   }
 
@@ -434,8 +433,9 @@ export default {
 
     // Manual trigger for testing
     if (pathname === "/run" && request.method === "POST") {
-      const s = url.searchParams.get("secret");
-      if (s !== env.MANUAL_RUN_SECRET) {
+      const auth = request.headers.get("Authorization");
+      const expected = `Bearer ${env.MANUAL_RUN_SECRET}`;
+      if (auth !== expected) {
         return new Response("Unauthorized", { status: 401 });
       }
       try {
