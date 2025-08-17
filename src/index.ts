@@ -411,10 +411,20 @@ export default {
 
     // Manual trigger for testing
     if (pathname === "/run" && request.method === "POST") {
-      const s = url.searchParams.get("secret");
-      if (s !== env.MANUAL_RUN_SECRET) {
+      // Expect: Authorization: Bearer <MANUAL_RUN_SECRET>
+      const auth = request.headers.get("authorization") || request.headers.get("Authorization");
+      const token = (() => {
+        if (!auth) return "";
+        // Allow both "Bearer <token>" and raw "<token>" for ergonomics
+        const maybeBearer = auth.trim();
+        const m = /^Bearer\s+(.+)$/i.exec(maybeBearer);
+        return m ? m[1].trim() : maybeBearer;
+      })();
+
+      if (!token || token !== env.MANUAL_RUN_SECRET) {
         return new Response("Unauthorized", { status: 401 });
       }
+
       try {
         const res = await runJob(env);
         return Response.json({ ok: true, ...res });

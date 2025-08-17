@@ -42,8 +42,17 @@ npm run deploy
 ```
 
 ## Endpoints
-
-- `POST /run?secret=<token>` – Manually trigger the job. Requires `MANUAL_RUN_SECRET`.
+- `POST /run` – Manually trigger the job. Requires `MANUAL_RUN_SECRET`.
+  - **Auth:** Send the secret in the `Authorization` header:
+    ```
+    Authorization: Bearer <MANUAL_RUN_SECRET>
+    ```
+  - **Example (curl):**
+    ```bash
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      https://<your-worker>/run
+    ```
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks.
 - `GET /health` – Simple health check returning `ok`.
 
