@@ -2,12 +2,13 @@ export interface Env {
   DB: D1Database;
 
   // Secrets / Vars
+  ASSETS: { fetch: typeof fetch };
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_IDS: string; // comma-separated chat IDs: "111,222,333"
   BASE_URL: string; // e.g. "https://your-worker.your-subdomain.workers.dev"
   REPLICATE_WEBHOOK_SECRET?: string; // optional: extra safety on callback
-  MANUAL_RUN_SECRET: string; // secret required for manual /run endpoint
+  MANUAL_RUN_SECRET: string; // bearer token required for manual /run endpoint
 }
 
 type DeathEntry = {
@@ -411,8 +412,9 @@ export default {
 
     // Manual trigger for testing
     if (pathname === "/run" && request.method === "POST") {
-      const s = url.searchParams.get("secret");
-      if (s !== env.MANUAL_RUN_SECRET) {
+      const auth = request.headers.get("Authorization");
+      const expected = `Bearer ${env.MANUAL_RUN_SECRET}`;
+      if (auth !== expected) {
         return new Response("Unauthorized", { status: 401 });
       }
       try {

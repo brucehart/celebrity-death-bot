@@ -24,7 +24,7 @@ The worker expects the following bindings and environment variables:
 - `TELEGRAM_CHAT_IDS` – Comma‑separated list of chat IDs to notify.
 - `BASE_URL` – Public URL of the worker, used when building webhook URLs.
 - `REPLICATE_WEBHOOK_SECRET` – Optional secret checked on webhook callbacks.
-- `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
+- `MANUAL_RUN_SECRET` – Bearer token required to call the manual `/run` endpoint. Send it via the `Authorization` header.
 
 ## Development
 
@@ -43,7 +43,13 @@ npm run deploy
 
 ## Endpoints
 
-- `POST /run?secret=<token>` – Manually trigger the job. Requires `MANUAL_RUN_SECRET`.
+- `POST /run` – Manually trigger the job. Requires `MANUAL_RUN_SECRET` sent as `Authorization: Bearer <token>`.
+  Example:
+
+  ```bash
+  curl -X POST https://your-worker.example.com/run \
+       -H "Authorization: Bearer $MANUAL_RUN_SECRET"
+  ```
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks.
 - `GET /health` – Simple health check returning `ok`.
 
