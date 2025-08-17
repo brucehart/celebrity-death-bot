@@ -1,12 +1,13 @@
 export interface Env {
   DB: D1Database;
+  ASSETS: Fetcher;
 
   // Secrets / Vars
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_IDS: string; // comma-separated chat IDs: "111,222,333"
   BASE_URL: string; // e.g. "https://your-worker.your-subdomain.workers.dev"
-  REPLICATE_WEBHOOK_SECRET?: string; // optional: extra safety on callback
+  REPLICATE_WEBHOOK_SECRET?: string; // optional: sign & verify webhook callbacks
   MANUAL_RUN_SECRET: string; // secret required for manual /run endpoint
 }
 
@@ -140,7 +141,7 @@ function buildReplicatePrompt(newEntries: DeathEntry[]): string {
 
 /** Trigger a Replicate prediction with webhook callback. */
 async function callReplicate(env: Env, prompt: string) {
-  const body = {
+  const body: any = {
     stream: false,
     input: {
       prompt,
@@ -150,13 +151,13 @@ async function callReplicate(env: Env, prompt: string) {
       reasoning_effort: "minimal",
       max_completion_tokens: 4096,
     },
-    webhook: env.REPLICATE_WEBHOOK_SECRET
-      ? `${env.BASE_URL}/replicate/callback?secret=${encodeURIComponent(
-          env.REPLICATE_WEBHOOK_SECRET
-        )}`
-      : `${env.BASE_URL}/replicate/callback`,
+    webhook: `${env.BASE_URL}/replicate/callback`,
     webhook_events_filter: ["completed"],
   };
+
+  if (env.REPLICATE_WEBHOOK_SECRET) {
+    body.webhook_secret = env.REPLICATE_WEBHOOK_SECRET;
+  }
 
   const res = await fetch(
     "https://api.replicate.com/v1/models/openai/gpt-5-mini/predictions",
@@ -239,18 +240,31 @@ async function runJob(env: Env) {
 
 /** Replicate webhook handler: parse output and notify via Telegram. */
 async function handleReplicateCallback(req: Request, env: Env): Promise<Response> {
-  // Optional secret check via ?secret=... on the webhook URL you registered with Replicate
+  const rawBody = await req.text();
+
+  // Optional HMAC signature check
   if (env.REPLICATE_WEBHOOK_SECRET) {
-    const url = new URL(req.url);
-    const s = url.searchParams.get("secret");
-    if (s !== env.REPLICATE_WEBHOOK_SECRET) {
+    const signature = req.headers.get("X-Replicate-Signature") ?? "";
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(env.REPLICATE_WEBHOOK_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+    const expected = Array.from(new Uint8Array(mac))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    if (!timingSafeEqual(expected, signature)) {
       return new Response("Unauthorized", { status: 401 });
     }
   }
 
   let payload: any;
   try {
-    payload = await req.json();
+    payload = JSON.parse(rawBody);
   } catch {
     return new Response("Invalid JSON", { status: 400 });
   }
@@ -314,6 +328,15 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
   return Response.json({ ok: true, notified });
 
   // ---------- helpers ----------
+
+  function timingSafeEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+      diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return diff === 0;
+  }
 
   // Coalesce string or nested array-of-strings into one string
   function coalesceOutput(raw: unknown): string {

@@ -23,7 +23,7 @@ The worker expects the following bindings and environment variables:
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
 - `TELEGRAM_CHAT_IDS` – Comma‑separated list of chat IDs to notify.
 - `BASE_URL` – Public URL of the worker, used when building webhook URLs.
-- `REPLICATE_WEBHOOK_SECRET` – Optional secret checked on webhook callbacks.
+- `REPLICATE_WEBHOOK_SECRET` – Optional secret used to sign and verify Replicate webhook callbacks.
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
 
 ## Development
