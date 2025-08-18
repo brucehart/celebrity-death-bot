@@ -2,13 +2,13 @@
 	"name": "celebrity-death-bot",
 	"version": "0.0.0",
 	"private": true,
-  "scripts": {
+	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types",
 		"test": "node --test"
-  },
+	},
 	"devDependencies": {
 		"typescript": "^5.5.2",
 		"wrangler": "^4.30.0"

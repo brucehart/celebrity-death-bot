@@ -4,7 +4,7 @@ export interface Env {
   // Secrets / Vars
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_CHAT_IDS: string; // comma-separated chat IDs: "111,222,333"
+  TELEGRAM_CHAT_IDS: string;
   BASE_URL: string; // e.g. "https://your-worker.your-subdomain.workers.dev"
   REPLICATE_WEBHOOK_SECRET?: string; // optional: extra safety on callback
   MANUAL_RUN_SECRET: string; // secret required for manual /run endpoint
@@ -176,11 +176,23 @@ async function callReplicate(env: Env, prompt: string) {
 
 import { buildTelegramMessage, truncateTelegramHTML } from './lib/telegram-sanitize.js';
 
-/** Send a Telegram message to all configured chat IDs. */
-async function notifyTelegram(env: Env, text: string) {
-  const ids = env.TELEGRAM_CHAT_IDS.split(",")
-    .map((s) => s.trim())
+type Subscriber = { type: string; chat_id: string; enabled: number };
+
+async function getTelegramChatIds(env: Env): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    `SELECT type, chat_id, enabled FROM subscribers WHERE enabled = 1 AND type = ?`
+  )
+    .bind('telegram')
+    .all<Subscriber>();
+
+  return (rows.results || [])
+    .map((r) => String((r as any).chat_id).trim())
     .filter(Boolean);
+}
+
+/** Send a Telegram message to all Telegram subscribers in D1. */
+async function notifyTelegram(env: Env, text: string) {
+  const ids = await getTelegramChatIds(env);
 
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
 
@@ -447,7 +459,7 @@ export default {
     }
 
     if (pathname === "/health") {
-      return new Response("ok");
+      return new Response("ok" + " " + env.TELEGRAM_CHAT_IDS);
     }
 
     return new Response("Not found", { status: 404 });
