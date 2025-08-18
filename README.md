@@ -56,7 +56,29 @@ npm run deploy
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks.
 - `GET /health` – Simple health check returning `ok`.
 
+## Telegram Webhook & Commands
+
+Configure your bot to send updates to the Worker and let users manage subscriptions via chat.
+
+- Set the Telegram webhook URL (include a secret if you configured one):
+  ```bash
+  export BASE_URL=<your-worker-url>
+  export TELEGRAM_BOT_TOKEN=<your-token>
+  export TELEGRAM_WEBHOOK_SECRET=<your-secret>
+  curl -X POST \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+    -d url="${BASE_URL}/telegram/webhook?secret=${TELEGRAM_WEBHOOK_SECRET}"
+  ```
+- Supported commands (send in a DM to your bot):
+  - `/start` or `/subscribe` – Subscribe this chat to alerts.
+  - `/stop` or `/unsubscribe` – Unsubscribe this chat.
+  - `/status` – Show current subscription status.
+
+Notes
+- Subscriptions are stored in the D1 table `subscribers` with fields: `type`, `chat_id`, `enabled`, `created_at`.
+- Only `type = 'telegram'` is used currently; the schema allows future channels (SMS, Signal, etc.).
+- Add secrets via Wrangler: `wrangler secret put TELEGRAM_WEBHOOK_SECRET` and ensure `TELEGRAM_BOT_TOKEN` is set.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE.md).
-

@@ -4,10 +4,10 @@ export interface Env {
   // Secrets / Vars
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_CHAT_IDS: string;
   BASE_URL: string; // e.g. "https://your-worker.your-subdomain.workers.dev"
   REPLICATE_WEBHOOK_SECRET?: string; // optional: extra safety on callback
   MANUAL_RUN_SECRET: string; // secret required for manual /run endpoint
+  TELEGRAM_WEBHOOK_SECRET?: string; // optional: secret for Telegram webhook URL
 }
 
 type DeathEntry = {
@@ -174,11 +174,25 @@ async function callReplicate(env: Env, prompt: string) {
   return res.json();
 }
 
-import { buildTelegramMessage, truncateTelegramHTML } from './lib/telegram-sanitize.js';
+import { buildTelegramMessage, truncateTelegramHTML, escapeHtmlText } from './lib/telegram-sanitize.js';
 
 type Subscriber = { type: string; chat_id: string; enabled: number };
 
+async function ensureSubscribersTable(env: Env) {
+  await env.DB.exec(
+    `CREATE TABLE IF NOT EXISTS subscribers (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       type TEXT NOT NULL,
+       chat_id TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       UNIQUE(type, chat_id)
+     );`
+  );
+}
+
 async function getTelegramChatIds(env: Env): Promise<string[]> {
+  await ensureSubscribersTable(env);
   const rows = await env.DB.prepare(
     `SELECT type, chat_id, enabled FROM subscribers WHERE enabled = 1 AND type = ?`
   )
@@ -188,6 +202,31 @@ async function getTelegramChatIds(env: Env): Promise<string[]> {
   return (rows.results || [])
     .map((r) => String((r as any).chat_id).trim())
     .filter(Boolean);
+}
+
+async function getSubscriberStatus(env: Env, chatId: string): Promise<0 | 1 | null> {
+  await ensureSubscribersTable(env);
+  const row = await env.DB.prepare(
+    `SELECT enabled FROM subscribers WHERE type = ? AND chat_id = ? LIMIT 1`
+  ).bind('telegram', chatId).first<{ enabled: number }>();
+  if (!row) return null;
+  return (row as any).enabled ? 1 : 0;
+}
+
+async function subscribe(env: Env, chatId: string) {
+  await ensureSubscribersTable(env);
+  await env.DB.prepare(
+    `INSERT INTO subscribers(type, chat_id, enabled)
+       VALUES('telegram', ?, 1)
+     ON CONFLICT(type, chat_id) DO UPDATE SET enabled = 1`
+  ).bind(chatId).run();
+}
+
+async function unsubscribe(env: Env, chatId: string) {
+  await ensureSubscribersTable(env);
+  await env.DB.prepare(
+    `UPDATE subscribers SET enabled = 0 WHERE type = 'telegram' AND chat_id = ?`
+  ).bind(chatId).run();
 }
 
 /** Send a Telegram message to all Telegram subscribers in D1. */
@@ -207,6 +246,19 @@ async function notifyTelegram(env: Env, text: string) {
     if (!res.ok) {
       console.warn("Telegram send failed", chat_id, await res.text());
     }
+  }
+}
+
+async function notifyTelegramSingle(env: Env, chat_id: string | number, text: string) {
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const safe = truncateTelegramHTML(escapeHtmlText(text));
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id, text: safe, parse_mode: 'HTML' }),
+  });
+  if (!res.ok) {
+    console.warn('Telegram reply failed', chat_id, await res.text());
   }
 }
 
@@ -425,6 +477,57 @@ export default {
 
     if (pathname === "/replicate/callback" && request.method === "POST") {
       return handleReplicateCallback(request, env);
+    }
+
+    // Telegram webhook for subscription management
+    if (pathname === "/telegram/webhook" && request.method === "POST") {
+      if (env.TELEGRAM_WEBHOOK_SECRET) {
+        const sec = url.searchParams.get('secret');
+        if (sec !== env.TELEGRAM_WEBHOOK_SECRET) {
+          return new Response('Unauthorized', { status: 401 });
+        }
+      }
+
+      let update: any;
+      try { update = await request.json(); } catch { return new Response('Invalid JSON', { status: 400 }); }
+
+      const message = update?.message;
+      const chatId = message?.chat?.id;
+      const text = (message?.text ?? '').trim();
+      if (!chatId || !text) {
+        return Response.json({ ok: true, ignored: true });
+      }
+
+      const cmd = text.split(/\s+/)[0].toLowerCase();
+      const isSub = cmd === '/start' || cmd === '/subscribe';
+      const isUnsub = cmd === '/stop' || cmd === '/unsubscribe';
+      const isStatus = cmd === '/status';
+
+      try {
+        if (isSub) {
+          const current = await getSubscriberStatus(env, String(chatId));
+          await subscribe(env, String(chatId));
+          await notifyTelegramSingle(env, chatId, current === 1 ? 'You are already subscribed.' : 'Subscribed. You will receive alerts here.');
+          return Response.json({ ok: true });
+        } else if (isUnsub) {
+          const current = await getSubscriberStatus(env, String(chatId));
+          await unsubscribe(env, String(chatId));
+          await notifyTelegramSingle(env, chatId, current === 0 ? 'You are already unsubscribed.' : 'Unsubscribed. You will no longer receive alerts.');
+          return Response.json({ ok: true });
+        } else if (isStatus) {
+          const s = await getSubscriberStatus(env, String(chatId));
+          const msg = s === 1 ? 'Status: subscribed.' : 'Status: not subscribed.';
+          await notifyTelegramSingle(env, chatId, msg);
+          return Response.json({ ok: true });
+        } else {
+          await notifyTelegramSingle(env, chatId, 'Unknown command. Try /subscribe, /unsubscribe, or /status.');
+          return Response.json({ ok: true });
+        }
+      } catch (e: any) {
+        console.error('Telegram webhook error', e);
+        try { await notifyTelegramSingle(env, chatId, 'Sorry, something went wrong. Please try again.'); } catch {}
+        return new Response('Server error', { status: 500 });
+      }
     }
 
     // Manual trigger for testing
