@@ -482,8 +482,8 @@ export default {
       }
 
       const cmd = text.split(/\s+/)[0].toLowerCase();
-      const isSub = cmd === '/start' || cmd === '/subscribe';
-      const isUnsub = cmd === '/stop' || cmd === '/unsubscribe';
+      const isSub = cmd === '/start' || cmd === '/subscribe' || cmd == '/join';
+      const isUnsub = cmd === '/stop' || cmd === '/unsubscribe' || cmd == '/leave';
       const isStatus = cmd === '/status';
 
       try {
