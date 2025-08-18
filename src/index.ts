@@ -108,8 +108,8 @@ async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
   if (exists) return false;
 
   await env.DB.prepare(
-    `INSERT INTO deaths (name, wiki_path, age, description, cause)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO deaths (name, wiki_path, age, description, cause, date_time, llm_result)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'no')`
   )
     .bind(e.name, e.wiki_path, e.age, e.description, e.cause)
     .run();
@@ -125,13 +125,16 @@ function buildReplicatePrompt(newEntries: DeathEntry[]): string {
       typeof e.age === "number" ? String(e.age) : "",
       e.description ?? "",
       e.cause ?? "",
+      `wiki_path=${e.wiki_path}`,
     ].map((x) => x.trim());
-    // "Name, age, description, cause"
+    // "Name, age, description, cause, wiki_path=/wiki/..."
     return parts.filter(Boolean).join(", ");
   });
 
   return [
-    `Extract from this list any names that an American might know. Include NFL, NBA, and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials. Structure the result as a JSON file with fields "name", "age", "description" and "cause of death". If no matches are found, return an empty Json structure with no fields.`,
+    `Extract from this list any names that an American might know. Include NFL, NBA, and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials.`,
+    `Return a JSON array of objects with fields: "name", "age", "description", "cause of death", and "wiki_path" (the same path provided in the input).`,
+    `If no matches are found, return an empty JSON array []. Return only JSON.`,
     `---`,
     lines.join("\n"),
     `----`,
@@ -188,8 +191,8 @@ async function notifyTelegram(env: Env, text: string) {
   for (const chat_id of ids) {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id, text }),
+      headers: { "Content-Type": "application/json"},
+      body: JSON.stringify({ chat_id, text, parse_mode: "HTML" }),
     });
     // Best-effort; don't throw the whole batch on a single failure.
     if (!res.ok) {
@@ -300,15 +303,25 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
       (it as any).causeOfDeath ??
       it["cause"]
     );
+    const wiki_path = toStr(it["wiki_path"]);
 
     const msg =
-      `🚨💀${name}` +
+      `🚨💀<a href="https://www.wikipedia.org${wiki_path}">${name}</a>` +
       (age ? ` (${age})` : "") +
       (desc ? ` : ${desc}` : "") +
       (cause ? ` - ${cause}` : "") + `💀🚨`;
 
     await notifyTelegram(env, msg);
     notified++;
+
+    if (wiki_path) {
+      await env.DB.prepare(
+        `UPDATE deaths
+           SET date_time = CURRENT_TIMESTAMP,
+               llm_result = 'yes'
+         WHERE wiki_path = ?`
+      ).bind(wiki_path).run();
+    }
   }
 
   return Response.json({ ok: true, notified });
