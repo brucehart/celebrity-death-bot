@@ -126,7 +126,7 @@ function buildReplicatePrompt(newEntries: DeathEntry[]): string {
   });
 
   return [
-    `Extract from this list any names that an American might know. Include NFL, NBA, and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials.`,
+    `Extract from this list any names that an American might know. Include NFL, NBA, NHL, WWE, PGA and MLB players, people from the entertainment industry, pop culture, popular music, TV shows, movies and commercials.`,
     `Return a JSON array of objects with fields: "name", "age", "description", "cause of death", and "wiki_path" (the same path provided in the input).`,
     `If no matches are found, return an empty JSON array []. Return only JSON.`,
     `---`,
@@ -459,7 +459,7 @@ export default {
     }
 
     if (pathname === "/health") {
-      return new Response("ok" + " " + env.TELEGRAM_CHAT_IDS);
+      return new Response("ok");
     }
 
     return new Response("Not found", { status: 404 });
