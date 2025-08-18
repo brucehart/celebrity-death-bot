@@ -73,14 +73,8 @@ function parseWikipedia(html: string): DeathEntry[] {
     const lastComma = rest.lastIndexOf(",");
     let description: string | null;
     let cause: string | null;
-
-    if (lastComma !== -1) {
-      description = dedupeSpaces(rest.slice(0, lastComma));
-      cause = dedupeSpaces(rest.slice(lastComma + 1));
-    } else {
-      description = dedupeSpaces(rest);
-      cause = null;
-    }
+    
+    description = dedupeSpaces(rest);
 
     // Filter: ensure we truly have "<name>, <age>, ..."
     if (!personName || Number.isNaN(ageNum)) continue;
@@ -108,8 +102,8 @@ async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
   if (exists) return false;
 
   await env.DB.prepare(
-    `INSERT INTO deaths (name, wiki_path, age, description, cause, date_time, llm_result)
-     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'no')`
+    `INSERT INTO deaths (name, wiki_path, age, description, cause, llm_result)
+     VALUES (?, ?, ?, ?, ?, 'no')`
   )
     .bind(e.name, e.wiki_path, e.age, e.description, e.cause)
     .run();
@@ -317,10 +311,11 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
     if (wiki_path) {
       await env.DB.prepare(
         `UPDATE deaths
-           SET date_time = CURRENT_TIMESTAMP,
+           SET cause = ?,
+               llm_date_time = CURRENT_TIMESTAMP,
                llm_result = 'yes'
          WHERE wiki_path = ?`
-      ).bind(wiki_path).run();
+      ).bind(cause, wiki_path).run();
     }
   }
 
