@@ -207,8 +207,9 @@ async function subscribe(env: Env, chatId: string) {
 }
 
 async function unsubscribe(env: Env, chatId: string) {
+  // Privacy: fully remove the subscriber record on unsubscribe
   await env.DB.prepare(
-    `UPDATE subscribers SET enabled = 0 WHERE type = 'telegram' AND chat_id = ?`
+    `DELETE FROM subscribers WHERE type = 'telegram' AND chat_id = ?`
   ).bind(chatId).run();
 }
 
@@ -495,7 +496,13 @@ export default {
         } else if (isUnsub) {
           const current = await getSubscriberStatus(env, String(chatId));
           await unsubscribe(env, String(chatId));
-          await notifyTelegramSingle(env, chatId, current === 0 ? 'You are already unsubscribed.' : 'Unsubscribed. You will no longer receive alerts.');
+          await notifyTelegramSingle(
+            env,
+            chatId,
+            (current === 0 || current === null)
+              ? 'You are already unsubscribed.'
+              : 'Unsubscribed. You will no longer receive alerts.'
+          );
           return Response.json({ ok: true });
         } else if (isStatus) {
           const s = await getSubscriberStatus(env, String(chatId));

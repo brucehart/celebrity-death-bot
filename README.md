@@ -71,7 +71,7 @@ Configure your bot to send updates to the Worker and let users manage subscripti
   ```
 - Supported commands (send in a DM to your bot):
   - `/start` or `/subscribe` – Subscribe this chat to alerts.
-  - `/stop` or `/unsubscribe` – Unsubscribe this chat.
+  - `/stop` or `/unsubscribe` – Unsubscribe this chat (we delete your chat ID).
   - `/status` – Show current subscription status.
 
 Notes
