@@ -174,6 +174,8 @@ async function callReplicate(env: Env, prompt: string) {
   return res.json();
 }
 
+import { buildTelegramMessage, truncateTelegramHTML } from './lib/telegram-sanitize.js';
+
 /** Send a Telegram message to all configured chat IDs. */
 async function notifyTelegram(env: Env, text: string) {
   const ids = env.TELEGRAM_CHAT_IDS.split(",")
@@ -183,10 +185,11 @@ async function notifyTelegram(env: Env, text: string) {
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
 
   for (const chat_id of ids) {
+    const bounded = truncateTelegramHTML(text);
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json"},
-      body: JSON.stringify({ chat_id, text, parse_mode: "HTML" }),
+      body: JSON.stringify({ chat_id, text: bounded, parse_mode: "HTML" }),
     });
     // Best-effort; don't throw the whole batch on a single failure.
     if (!res.ok) {
@@ -299,12 +302,7 @@ async function handleReplicateCallback(req: Request, env: Env): Promise<Response
     );
     const wiki_path = toStr(it["wiki_path"]);
 
-    const msg =
-      `🚨💀<a href="https://www.wikipedia.org${wiki_path}">${name}</a>` +
-      (age ? ` (${age})` : "") +
-      (desc ? ` : ${desc}` : "") +
-      (cause ? ` - ${cause}` : "") + `💀🚨`;
-
+    const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path });
     await notifyTelegram(env, msg);
     notified++;
 
