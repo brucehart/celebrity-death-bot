@@ -12,7 +12,7 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 2. **Parses entries**: From the page, it extracts each person's name, Wikipedia path, age, description and cause of death.
 3. **Stores in D1**: Entries are stored in a D1 database. Items already in the database are ignored.
 4. **LLM evaluation**: Newly discovered entries are sent to Replicate for LLM evaluation. The worker exposes a webhook to receive callbacks from Replicate.
-5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to the configured chat IDs.
+5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to subscribed chats.
 
 ## Configuration
 
@@ -21,7 +21,6 @@ The worker expects the following bindings and environment variables:
 - `DB` – D1 database binding used to persist entries.
 - `REPLICATE_API_TOKEN` – API token for Replicate.
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
-- `TELEGRAM_CHAT_IDS` – Comma‑separated list of chat IDs to notify.
 - `BASE_URL` – Public URL of the worker, used when building webhook URLs.
 - `REPLICATE_WEBHOOK_SECRET` – Optional secret checked on webhook callbacks.
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.

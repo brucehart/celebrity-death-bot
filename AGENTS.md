@@ -13,7 +13,6 @@
 - Secrets (set once per environment):
   - `wrangler secret put REPLICATE_API_TOKEN`
   - `wrangler secret put TELEGRAM_BOT_TOKEN`
-  - `wrangler secret put TELEGRAM_CHAT_IDS`
   - `wrangler secret put MANUAL_RUN_SECRET`
   - Optional: `wrangler secret put REPLICATE_WEBHOOK_SECRET`
 
