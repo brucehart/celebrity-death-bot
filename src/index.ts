@@ -178,21 +178,7 @@ import { buildTelegramMessage, truncateTelegramHTML, escapeHtmlText } from './li
 
 type Subscriber = { type: string; chat_id: string; enabled: number };
 
-async function ensureSubscribersTable(env: Env) {
-  await env.DB.exec(
-    `CREATE TABLE IF NOT EXISTS subscribers (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       type TEXT NOT NULL,
-       chat_id TEXT NOT NULL,
-       enabled INTEGER NOT NULL DEFAULT 1,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       UNIQUE(type, chat_id)
-     );`
-  );
-}
-
 async function getTelegramChatIds(env: Env): Promise<string[]> {
-  await ensureSubscribersTable(env);
   const rows = await env.DB.prepare(
     `SELECT type, chat_id, enabled FROM subscribers WHERE enabled = 1 AND type = ?`
   )
@@ -205,7 +191,6 @@ async function getTelegramChatIds(env: Env): Promise<string[]> {
 }
 
 async function getSubscriberStatus(env: Env, chatId: string): Promise<0 | 1 | null> {
-  await ensureSubscribersTable(env);
   const row = await env.DB.prepare(
     `SELECT enabled FROM subscribers WHERE type = ? AND chat_id = ? LIMIT 1`
   ).bind('telegram', chatId).first<{ enabled: number }>();
@@ -214,7 +199,6 @@ async function getSubscriberStatus(env: Env, chatId: string): Promise<0 | 1 | nu
 }
 
 async function subscribe(env: Env, chatId: string) {
-  await ensureSubscribersTable(env);
   await env.DB.prepare(
     `INSERT INTO subscribers(type, chat_id, enabled)
        VALUES('telegram', ?, 1)
@@ -223,7 +207,6 @@ async function subscribe(env: Env, chatId: string) {
 }
 
 async function unsubscribe(env: Env, chatId: string) {
-  await ensureSubscribersTable(env);
   await env.DB.prepare(
     `UPDATE subscribers SET enabled = 0 WHERE type = 'telegram' AND chat_id = ?`
   ).bind(chatId).run();

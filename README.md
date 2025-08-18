@@ -75,8 +75,24 @@ Configure your bot to send updates to the Worker and let users manage subscripti
   - `/status` – Show current subscription status.
 
 Notes
-- Subscriptions are stored in the D1 table `subscribers` with fields: `type`, `chat_id`, `enabled`, `created_at`.
+- Subscriptions are stored in the D1 table `subscribers` with fields: `id`, `type`, `chat_id`, `enabled`, `created_at` (unique on `(type, chat_id)`).
 - Only `type = 'telegram'` is used currently; the schema allows future channels (SMS, Signal, etc.).
+- Schema is managed outside runtime. A sample migration exists at `migrations/001_create_subscribers.sql`.
+- Apply schema (option A — migration file):
+  ```bash
+  wrangler d1 execute celebrity-death-bot --file=./migrations/001_create_subscribers.sql
+  ```
+- Or create manually (option B):
+  ```sql
+  CREATE TABLE IF NOT EXISTS subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (type, chat_id)
+  );
+  ```
 - Add secrets via Wrangler: `wrangler secret put TELEGRAM_WEBHOOK_SECRET` and ensure `TELEGRAM_BOT_TOKEN` is set.
 
 ## License
