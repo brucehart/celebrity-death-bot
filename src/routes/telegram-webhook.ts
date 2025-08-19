@@ -29,6 +29,7 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
   const isSub = cmd === '/start' || cmd === '/subscribe' || cmd == '/join';
   const isUnsub = cmd === '/stop' || cmd === '/unsubscribe' || cmd == '/leave';
   const isStatus = cmd === '/status';
+  const isCommands = cmd === '/commands';
 
   try {
     if (isSub) {
@@ -46,8 +47,18 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
       const msg = s === 1 ? 'Status: subscribed.' : 'Status: not subscribed.';
       await notifyTelegramSingle(env, chatId, msg);
       return Response.json({ ok: true });
+    } else if (isCommands) {
+      const help = [
+        'Available commands:',
+        '/subscribe – Subscribe to alerts',
+        '/unsubscribe – Unsubscribe from alerts',
+        '/status – Show current subscription status',
+        '/commands – Show this list',
+      ].join('\n');
+      await notifyTelegramSingle(env, chatId, help);
+      return Response.json({ ok: true });
     } else {
-      await notifyTelegramSingle(env, chatId, 'Unknown command. Try /subscribe, /unsubscribe, or /status.');
+      await notifyTelegramSingle(env, chatId, 'Unknown command. Try /subscribe, /unsubscribe, /status, or /commands.');
       return Response.json({ ok: true });
     }
   } catch (e: any) {
@@ -58,4 +69,3 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
     return new Response('Server error', { status: 500 });
   }
 }
-
