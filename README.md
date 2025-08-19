@@ -53,6 +53,7 @@ npm run deploy
       https://<your-worker>/run
     ```
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks.
+- `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands (append `?secret=...` if configured).
 - `GET /health` – Simple health check returning `ok`.
 
 ## Telegram Webhook & Commands
@@ -72,6 +73,7 @@ Configure your bot to send updates to the Worker and let users manage subscripti
   - `/start` or `/subscribe` – Subscribe this chat to alerts.
   - `/stop` or `/unsubscribe` – Unsubscribe this chat (we delete your chat ID).
   - `/status` – Show current subscription status.
+  - `/commands` – Show the list of available commands.
 
 Notes
 - Subscriptions are stored in the D1 table `subscribers` with fields: `id`, `type`, `chat_id`, `enabled`, `created_at` (unique on `(type, chat_id)`).
