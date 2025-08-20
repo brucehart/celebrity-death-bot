@@ -34,5 +34,5 @@
 
 ## Security & Configuration Tips
 - Store secrets with Wrangler; never commit tokens.
-- `/run` requires `MANUAL_RUN_SECRET`. If set, `/replicate/callback` verifies HMAC signatures using `REPLICATE_WEBHOOK_SECRET` and enforces a 5-minute timestamp window.
+- `/run` requires `MANUAL_RUN_SECRET`. If set, `/replicate/callback` verifies HMAC signatures using `REPLICATE_WEBHOOK_SECRET` (5-minute window). If `TELEGRAM_WEBHOOK_SECRET` is set, `/telegram/webhook` must receive header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
 - Ensure a D1 table `deaths` exists with columns used in `src/index.ts` (e.g., `name`, `wiki_path` UNIQUE, `age`, `description`, `cause`, `llm_result`, `llm_date_time`).

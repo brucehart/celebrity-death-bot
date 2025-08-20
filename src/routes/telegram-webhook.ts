@@ -4,9 +4,8 @@ import { notifyTelegramSingle } from '../services/telegram';
 
 export async function telegramWebhook(request: Request, env: Env): Promise<Response> {
   if (env.TELEGRAM_WEBHOOK_SECRET) {
-    const url = new URL(request.url);
-    const sec = url.searchParams.get('secret');
-    if (sec !== env.TELEGRAM_WEBHOOK_SECRET) {
+    const header = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
+    if (!header || header !== env.TELEGRAM_WEBHOOK_SECRET) {
       return new Response('Unauthorized', { status: 401 });
     }
   }

@@ -54,7 +54,7 @@ npm run deploy
       https://<your-worker>/run
     ```
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
-- `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands (append `?secret=...` if configured).
+- `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
 - `GET /health` – Simple health check returning `ok`.
 
 ## Rate Limiting
@@ -78,14 +78,20 @@ Schema
 
 Configure your bot to send updates to the Worker and let users manage subscriptions via chat.
 
-- Set the Telegram webhook URL (include a secret if you configured one):
+- Set the Telegram webhook URL and provide a secret token that Telegram will send in header `X-Telegram-Bot-Api-Secret-Token` with every webhook request:
   ```bash
   export BASE_URL=<your-worker-url>
   export TELEGRAM_BOT_TOKEN=<your-token>
-  export TELEGRAM_WEBHOOK_SECRET=<your-secret>
+  export TELEGRAM_WEBHOOK_SECRET=<your-secret> # allowed chars: A-Z a-z 0-9 _ -
+
+  # Store secret in Worker
+  wrangler secret put TELEGRAM_WEBHOOK_SECRET <<< "$TELEGRAM_WEBHOOK_SECRET"
+
+  # Configure webhook and secret_token on Telegram side
   curl -X POST \
     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-    -d url="${BASE_URL}/telegram/webhook?secret=${TELEGRAM_WEBHOOK_SECRET}"
+    -d url="${BASE_URL}/telegram/webhook" \
+    -d secret_token="${TELEGRAM_WEBHOOK_SECRET}"
   ```
 - Supported commands (send in a DM to your bot):
   - `/start` or `/subscribe` – Subscribe this chat to alerts.
