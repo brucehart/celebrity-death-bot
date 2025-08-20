@@ -1,6 +1,6 @@
 import type { Env, DeathEntry } from '../types';
 import { toNYYear, parseWikipedia } from './wiki';
-import { insertIfNew } from './db';
+import { insertBatchReturningNew, insertIfNew } from './db';
 import { buildReplicatePrompt, callReplicate } from './replicate';
 import { fetchWithRetry } from '../utils/fetch';
 import { getConfig } from '../config';
@@ -23,13 +23,20 @@ export async function runJob(env: Env) {
   const html = await res.text();
   const parsed = parseWikipedia(html);
 
-  const newOnes: DeathEntry[] = [];
-  for (const e of parsed) {
-    try {
-      const inserted = await insertIfNew(env, e);
-      if (inserted) newOnes.push(e);
-    } catch (err) {
-      console.warn('Insert failed', e.wiki_path, err);
+  // Batched insert with RETURNING: returns only newly inserted rows
+  let newOnes: DeathEntry[] = [];
+  try {
+    newOnes = await insertBatchReturningNew(env, parsed);
+  } catch (err) {
+    console.warn('Batch insert failed', err);
+    // Fallback (rare): per-row insert to avoid dropping alerts entirely
+    for (const e of parsed) {
+      try {
+        const inserted = await insertIfNew(env, e);
+        if (inserted) newOnes.push(e);
+      } catch (err2) {
+        console.warn('Insert failed', e.wiki_path, err2);
+      }
     }
   }
 
@@ -40,4 +47,3 @@ export async function runJob(env: Env) {
 
   return { scanned: parsed.length, inserted: newOnes.length };
 }
-
