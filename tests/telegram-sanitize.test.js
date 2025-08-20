@@ -48,3 +48,11 @@ test('buildTelegramMessage enforces 4096 character limit with ellipsis', () => {
   assert.ok(msg.length <= MAX_TELEGRAM_LEN);
   assert.equal(msg.at(-1), '…');
 });
+
+test('buildTelegramMessage omits cause when set to "unknown" (case-insensitive)', () => {
+  const msg1 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'unknown', wiki_path: '/wiki/Test' });
+  assert.ok(!msg1.includes(' - '), 'should not include cause separator when cause is unknown');
+
+  const msg2 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'Unknown', wiki_path: '/wiki/Test' });
+  assert.ok(!msg2.includes(' - '), 'should not include cause separator when cause is Unknown');
+});

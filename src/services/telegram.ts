@@ -83,7 +83,9 @@ export function buildTelegramMessage({ name, age, description, cause, wiki_path 
   const safeName = escapeHtmlText(name || '');
   const safeAge = typeof age === 'string' ? escapeHtmlText(age) : age != null ? escapeHtmlText(String(age)) : '';
   const safeDesc = escapeHtmlText(description || '');
-  const safeCause = escapeHtmlText(cause || '');
+  const causeRaw = (cause ?? '').toString();
+  const isUnknown = causeRaw.trim().toLowerCase() === 'unknown';
+  const safeCause = isUnknown ? '' : escapeHtmlText(causeRaw);
   const url = buildSafeUrl(wiki_path || '');
   const safeHref = escapeHtmlAttr(url);
 
