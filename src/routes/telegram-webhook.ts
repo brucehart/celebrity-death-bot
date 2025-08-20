@@ -29,7 +29,7 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
   const isSub = cmd === '/start' || cmd === '/subscribe' || cmd == '/join';
   const isUnsub = cmd === '/stop' || cmd === '/unsubscribe' || cmd == '/leave';
   const isStatus = cmd === '/status';
-  const isCommands = cmd === '/commands';
+  const isCommands = cmd === '/commands' || cmd == '/help';
 
   try {
     if (isSub) {
@@ -53,7 +53,7 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
         '/subscribe – Subscribe to alerts',
         '/unsubscribe – Unsubscribe from alerts',
         '/status – Show current subscription status',
-        '/commands – Show this list',
+        '/help – Show this list',
       ].join('\n');
       await notifyTelegramSingle(env, chatId, help);
       return Response.json({ ok: true });
