@@ -1,9 +1,9 @@
-import type { Env, DeathEntry } from '../types';
-import { toNYYear, parseWikipedia } from './wiki';
-import { insertBatchReturningNew, insertIfNew } from './db';
-import { buildReplicatePrompt, callReplicate } from './replicate';
-import { fetchWithRetry } from '../utils/fetch';
-import { getConfig } from '../config';
+import type { Env, DeathEntry } from '../types.ts';
+import { toNYYear, parseWikipedia } from './wiki.ts';
+import { insertBatchReturningNew, insertIfNew } from './db.ts';
+import { buildReplicatePrompt, callReplicate } from './replicate.ts';
+import { fetchWithRetry } from '../utils/fetch.ts';
+import { getConfig } from '../config.ts';
 
 export async function runJob(env: Env) {
   const cfg = getConfig(env);

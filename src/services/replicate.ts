@@ -1,6 +1,6 @@
-import type { Env, DeathEntry } from '../types';
-import { fetchWithRetry } from '../utils/fetch';
-import { getConfig } from '../config';
+import type { Env, DeathEntry } from '../types.ts';
+import { fetchWithRetry } from '../utils/fetch.ts';
+import { getConfig } from '../config.ts';
 
 export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
   const lines = newEntries.map((e) => {

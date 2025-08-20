@@ -26,6 +26,10 @@ The worker expects the following bindings and environment variables:
   worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
 
+### Cron schedule
+
+The default schedule runs hourly at minute 5 (see `wrangler.jsonc`). Adjust as needed.
+
 ## Development
 
 Install dependencies and start the development server using Wrangler:
@@ -72,6 +76,19 @@ Schema
 - Apply the migration:
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/002_create_rate_limits.sql
+  ```
+
+## Database Schema
+
+The worker stores parsed entries and subscriber/chat state in D1.
+
+- Death entries: `migrations/003_create_deaths.sql`
+  ```bash
+  wrangler d1 execute celebrity-death-bot --file=./migrations/003_create_deaths.sql
+  ```
+- Telegram subscribers: `migrations/001_create_subscribers.sql`
+  ```bash
+  wrangler d1 execute celebrity-death-bot --file=./migrations/001_create_subscribers.sql
   ```
 
 ## Telegram Webhook & Commands
@@ -145,6 +162,17 @@ Notes
 - Do not append secrets to the webhook URL. This worker no longer uses `?secret=...` for Replicate callbacks; it relies on HMAC verification only.
 - The secret format is `whsec_<base64>`. Only the base64 part is used as the raw HMAC key.
 - The worker uses constant-time comparison and enforces a 5-minute timestamp tolerance to mitigate replay attacks.
+
+## Testing
+
+This repo uses Node’s built-in `node:test` for a few focused unit tests around webhook verification, Telegram HTML sanitization, Wikipedia parsing, and JSON extraction helpers.
+
+- Run all tests:
+  ```bash
+  npm test
+  ```
+
+If you prefer Vitest, you can add it later; place tests beside code as `*.test.ts`.
 
 ## License
 

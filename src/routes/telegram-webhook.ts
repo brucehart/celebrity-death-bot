@@ -1,6 +1,6 @@
-import type { Env } from '../types';
-import { getSubscriberStatus, subscribeTelegram, unsubscribeTelegram } from '../services/db';
-import { notifyTelegramSingle } from '../services/telegram';
+import type { Env } from '../types.ts';
+import { getSubscriberStatus, subscribeTelegram, unsubscribeTelegram } from '../services/db.ts';
+import { notifyTelegramSingle } from '../services/telegram.ts';
 
 export async function telegramWebhook(request: Request, env: Env): Promise<Response> {
   if (env.TELEGRAM_WEBHOOK_SECRET) {

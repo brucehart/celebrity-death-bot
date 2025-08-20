@@ -1,10 +1,14 @@
-import type { Env } from './types';
-import { Router } from './router';
-import { replicateCallback } from './routes/replicate-callback';
-import { manualRun } from './routes/run';
-import { telegramWebhook } from './routes/telegram-webhook';
-import { health } from './routes/health';
-import { runJob } from './services/job';
+// Cloudflare Worker entrypoint
+// - Exposes HTTP routes and a scheduled cron job
+// - Serves a minimal static asset (privacy policy) via the ASSETS binding
+// - All business logic lives in small, focused route/service modules
+import type { Env } from './types.ts';
+import { Router } from './router.ts';
+import { replicateCallback } from './routes/replicate-callback.ts';
+import { manualRun } from './routes/run.ts';
+import { telegramWebhook } from './routes/telegram-webhook.ts';
+import { health } from './routes/health.ts';
+import { runJob } from './services/job.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
@@ -28,6 +32,7 @@ export default {
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+    // Serve privacy policy via Workers Assets when explicitly requested
     if (url.pathname === '/privacy' && request.method === 'GET') {
       return env.ASSETS.fetch(new Request('privacy.html', request));
     }

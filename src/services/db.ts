@@ -1,4 +1,4 @@
-import type { Env, DeathEntry } from '../types';
+import type { Env, DeathEntry } from '../types.ts';
 
 export async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
   const exists = await env.DB.prepare(`SELECT 1 FROM deaths WHERE wiki_path = ? LIMIT 1`).bind(e.wiki_path).first<{ 1: number }>();

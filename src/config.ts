@@ -1,5 +1,5 @@
 // Centralized configuration and constants
-import type { Env } from './types';
+import type { Env } from './types.ts';
 
 export const TZ = 'America/New_York';
 

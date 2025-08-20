@@ -1,9 +1,9 @@
-import type { Env } from '../types';
-import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/json';
-import { toStr } from '../utils/strings';
-import { updateDeathLLM } from '../services/db';
-import { buildTelegramMessage, notifyTelegram } from '../services/telegram';
-import { verifyReplicateWebhook } from '../utils/replicate-webhook';
+import type { Env } from '../types.ts';
+import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/json.ts';
+import { toStr } from '../utils/strings.ts';
+import { updateDeathLLM } from '../services/db.ts';
+import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
+import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
 
 export async function replicateCallback(request: Request, env: Env): Promise<Response> {
   // Read raw body text once for signature verification and JSON parsing

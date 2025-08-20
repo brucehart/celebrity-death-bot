@@ -1,7 +1,7 @@
-import type { Env } from '../types';
-import { runJob } from '../services/job';
-import { getConfig } from '../config';
-import { checkRateLimits } from '../services/rate-limit';
+import type { Env } from '../types.ts';
+import { runJob } from '../services/job.ts';
+import { getConfig } from '../config.ts';
+import { checkRateLimits } from '../services/rate-limit.ts';
 
 export async function manualRun(request: Request, env: Env): Promise<Response> {
   // Apply rate limiting per IP (covers both authorized and unauthorized attempts)

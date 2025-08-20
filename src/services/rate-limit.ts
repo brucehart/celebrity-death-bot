@@ -1,4 +1,4 @@
-import type { Env } from '../types';
+import type { Env } from '../types.ts';
 
 export type RateWindow = { windowSeconds: number; limit: number };
 
@@ -54,4 +54,3 @@ export async function checkRateLimits(env: Env, scope: string, identifier: strin
   }
   return firstExceeded ? { allowed: false, exceeded: firstExceeded } : { allowed: true };
 }
-

@@ -1,7 +1,7 @@
-import type { Env } from '../types';
-import { fetchWithRetry } from '../utils/fetch';
-import { getTelegramChatIds } from './db';
-import { getConfig } from '../config';
+import type { Env } from '../types.ts';
+import { fetchWithRetry } from '../utils/fetch.ts';
+import { getTelegramChatIds } from './db.ts';
+import { getConfig } from '../config.ts';
 
 // Telegram HTML message helpers (TypeScript)
 // - Escapes unsafe characters in text and attribute contexts
