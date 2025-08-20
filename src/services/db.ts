@@ -29,7 +29,7 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
   ] as const);
 
   // 5 params per row -> keep well under 999
-  const CHUNK = 180;
+  const CHUNK = 480;
   const newOnes: DeathEntry[] = [];
 
   // Begin transaction
