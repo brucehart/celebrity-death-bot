@@ -56,9 +56,8 @@ export async function callReplicate(env: Env, prompt: string) {
       reasoning_effort: 'minimal',
       max_completion_tokens: 4096,
     },
-    webhook: env.REPLICATE_WEBHOOK_SECRET
-      ? `${cfg.baseUrl}/replicate/callback?secret=${encodeURIComponent(env.REPLICATE_WEBHOOK_SECRET)}`
-      : `${cfg.baseUrl}/replicate/callback`,
+    // Replicate will sign webhooks; verification happens in the callback route.
+    webhook: `${cfg.baseUrl}/replicate/callback`,
     webhook_events_filter: ['completed'],
   };
 

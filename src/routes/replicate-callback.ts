@@ -3,19 +3,27 @@ import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/
 import { toStr } from '../utils/strings';
 import { updateDeathLLM } from '../services/db';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram';
+import { verifyReplicateWebhook } from '../utils/replicate-webhook';
 
 export async function replicateCallback(request: Request, env: Env): Promise<Response> {
-  if (env.REPLICATE_WEBHOOK_SECRET) {
-    const url = new URL(request.url);
-    const s = url.searchParams.get('secret');
-    if (s !== env.REPLICATE_WEBHOOK_SECRET) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+  // Read raw body text once for signature verification and JSON parsing
+  let bodyText = '';
+  try {
+    bodyText = await request.clone().text();
+  } catch {
+    return new Response('Invalid body', { status: 400 });
   }
 
+  // If configured, verify Replicate webhook HMAC signature and timestamp
+  if (env.REPLICATE_WEBHOOK_SECRET) {
+    const res = await verifyReplicateWebhook(request, env.REPLICATE_WEBHOOK_SECRET, bodyText);
+    if (!res.ok) return new Response(res.error, { status: res.code });
+  }
+
+  // Parse JSON payload only after signature verification
   let payload: any;
   try {
-    payload = await request.json();
+    payload = JSON.parse(bodyText);
   } catch {
     return new Response('Invalid JSON', { status: 400 });
   }
@@ -61,4 +69,3 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 
   return Response.json({ ok: true, notified });
 }
-

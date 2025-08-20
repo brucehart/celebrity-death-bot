@@ -22,7 +22,8 @@ The worker expects the following bindings and environment variables:
 - `REPLICATE_API_TOKEN` – API token for Replicate.
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
 - `BASE_URL` – Public URL of the worker, used when building webhook URLs.
-- `REPLICATE_WEBHOOK_SECRET` – Optional secret checked on webhook callbacks.
+- `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret. When set, the
+  worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
 
 ## Development
@@ -52,7 +53,7 @@ npm run deploy
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
       https://<your-worker>/run
     ```
-- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks.
+- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands (append `?secret=...` if configured).
 - `GET /health` – Simple health check returning `ok`.
 
@@ -112,6 +113,32 @@ Notes
   );
   ```
 - Add secrets via Wrangler: `wrangler secret put TELEGRAM_WEBHOOK_SECRET` and ensure `TELEGRAM_BOT_TOKEN` is set.
+
+## Replicate Webhook Signing (HMAC)
+
+Replicate signs each webhook delivery. This worker verifies signatures to prevent spoofed or replayed requests.
+
+- Headers used: `webhook-id`, `webhook-timestamp` (seconds), `webhook-signature`.
+- Signed content: `${webhook-id}.${webhook-timestamp}.${rawBody}` (raw, unmodified body string).
+- Algorithm: HMAC-SHA256 with your Replicate webhook signing key.
+- Timestamp window: 5 minutes (requests older than this are rejected).
+
+Setup
+- Retrieve your signing key from Replicate (associated with your API token):
+  ```bash
+  curl -s -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
+    https://api.replicate.com/v1/webhooks/default/secret
+  # { "key": "whsec_..." }
+  ```
+- Store the key as a Worker secret:
+  ```bash
+  wrangler secret put REPLICATE_WEBHOOK_SECRET
+  ```
+
+Notes
+- Do not append secrets to the webhook URL. This worker no longer uses `?secret=...` for Replicate callbacks; it relies on HMAC verification only.
+- The secret format is `whsec_<base64>`. Only the base64 part is used as the raw HMAC key.
+- The worker uses constant-time comparison and enforces a 5-minute timestamp tolerance to mitigate replay attacks.
 
 ## License
 
