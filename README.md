@@ -56,6 +56,23 @@ npm run deploy
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands (append `?secret=...` if configured).
 - `GET /health` – Simple health check returning `ok`.
 
+## Rate Limiting
+
+The `POST /run` endpoint is rate-limited to protect the worker from abuse and accidental overload.
+
+- Default limits: 3 requests per 60 seconds and 20 requests per hour per client IP.
+- Configuration: Override with the env var `RUN_RATE_LIMITS` as a comma-separated list of `<windowInSeconds>:<limit>` pairs.
+  - Example: `RUN_RATE_LIMITS="60:5,3600:50"` sets 5/minute and 50/hour.
+- Behavior: If a limit is exceeded, the endpoint responds with `429 Too Many Requests` and includes a `Retry-After` header (seconds).
+- Logging: Exceed events are logged with IP and window info for operational visibility.
+
+Schema
+- The limiter uses a small D1 table `rate_limits` for counters.
+- Apply the migration:
+  ```bash
+  wrangler d1 execute celebrity-death-bot --file=./migrations/002_create_rate_limits.sql
+  ```
+
 ## Telegram Webhook & Commands
 
 Configure your bot to send updates to the Worker and let users manage subscriptions via chat.

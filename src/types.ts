@@ -7,6 +7,8 @@ export interface Env {
   REPLICATE_WEBHOOK_SECRET?: string;
   MANUAL_RUN_SECRET: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  // Optional: configure rate limits for /run as "60:3,3600:20"
+  RUN_RATE_LIMITS?: string;
   ASSETS: Fetcher; // bound by Wrangler for static assets
 }
 
@@ -17,4 +19,3 @@ export type DeathEntry = {
   description: string | null;
   cause: string | null;
 };
-
