@@ -40,6 +40,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
     '',
     '----',
     'Input (each line: name, age, description, cause of death, wiki_path):',
+    '',
     lines.join('\n\n'),
     '----',
   ].join('\n');
