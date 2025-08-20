@@ -7,7 +7,7 @@ import {
   buildTelegramMessage,
   truncateTelegramHTML,
   MAX_TELEGRAM_LEN,
-} from '../src/lib/telegram-sanitize.js';
+} from '../src/services/telegram.ts';
 
 test('escapeHtmlText escapes &, <, > and strips control chars', () => {
   const input = '\u0001a<&>b\u0007';
@@ -48,4 +48,3 @@ test('buildTelegramMessage enforces 4096 character limit with ellipsis', () => {
   assert.ok(msg.length <= MAX_TELEGRAM_LEN);
   assert.equal(msg.at(-1), '…');
 });
-
