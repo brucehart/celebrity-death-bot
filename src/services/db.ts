@@ -28,35 +28,36 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
     r.cause ?? null,
   ] as const);
 
-  // 5 params per row -> keep well under 999
-  const CHUNK = 480;
+  // 5 params per row -> SQLite has a 999 parameter limit. 199*5=995
+  const CHUNK = 199;
   const newOnes: DeathEntry[] = [];
 
-  // Begin transaction
-  await env.DB.prepare('BEGIN').run();
-  try {
-    for (let i = 0; i < tuples.length; i += CHUNK) {
-      const chunk = tuples.slice(i, i + CHUNK);
-      const placeholders = chunk
-        .map((_, j) => `(?${j * 5 + 1},?${j * 5 + 2},?${j * 5 + 3},?${j * 5 + 4},?${j * 5 + 5})`)
-        .join(',');
+  // Use D1's batch API which runs statements in a transaction.
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < tuples.length; i += CHUNK) {
+    const chunk = tuples.slice(i, i + CHUNK);
+    const placeholders = chunk
+      .map((_, j) => `(?${j * 5 + 1},?${j * 5 + 2},?${j * 5 + 3},?${j * 5 + 4},?${j * 5 + 5})`)
+      .join(',');
 
-      const sql = `
-        INSERT INTO deaths (name, wiki_path, age, description, cause, llm_result)
-        SELECT v.name, v.wiki_path, v.age, v.description, v.cause, 'no'
-        FROM (VALUES ${placeholders}) AS v(name, wiki_path, age, description, cause)
-        ON CONFLICT(wiki_path) DO NOTHING
-        RETURNING name, wiki_path, age, description, cause
-      `;
+    const sql = `
+      INSERT INTO deaths (name, wiki_path, age, description, cause, llm_result)
+      SELECT v.name, v.wiki_path, v.age, v.description, v.cause, 'no'
+      FROM (VALUES ${placeholders}) AS v(name, wiki_path, age, description, cause)
+      ON CONFLICT(wiki_path) DO NOTHING
+      RETURNING name, wiki_path, age, description, cause
+    `;
 
-      const flatBinds = chunk.flat();
-      const res = await env.DB.prepare(sql).bind(...flatBinds).all<DeathEntry>();
-      if (res.results?.length) newOnes.push(...(res.results as any));
+    const flatBinds = chunk.flat();
+    statements.push(env.DB.prepare(sql).bind(...flatBinds));
+  }
+
+  if (statements.length) {
+    const results = await env.DB.batch<DeathEntry>(statements);
+    for (const r of results) {
+      const rows = (r as any).results as DeathEntry[] | undefined;
+      if (rows && rows.length) newOnes.push(...rows);
     }
-    await env.DB.prepare('COMMIT').run();
-  } catch (err) {
-    await env.DB.prepare('ROLLBACK').run();
-    throw err;
   }
 
   return newOnes;
