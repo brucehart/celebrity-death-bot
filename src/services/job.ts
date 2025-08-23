@@ -1,6 +1,6 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { toNYYear, parseWikipedia } from './wiki.ts';
-import { insertBatchReturningNew, insertIfNew } from './db.ts';
+import { insertIfNew } from './db.ts';
 import { buildReplicatePrompt, callReplicate } from './replicate.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
@@ -64,20 +64,14 @@ export async function runJob(env: Env) {
     parsedAll.push(...parsed);
   }
 
-  // Batched insert with RETURNING: returns only newly inserted rows
-  let newOnes: DeathEntry[] = [];
-  try {
-    newOnes = await insertBatchReturningNew(env, parsedAll);
-  } catch (err) {
-    console.warn('Batch insert failed', err);
-    // Fallback (rare): per-row insert to avoid dropping alerts entirely
-    for (const e of parsedAll) {
-      try {
-        const inserted = await insertIfNew(env, e);
-        if (inserted) newOnes.push(e);
-      } catch (err2) {
-        console.warn('Insert failed', e.wiki_path, err2);
-      }
+  // Per-row check and insert: SELECT by wiki_path, then INSERT if new
+  const newOnes: DeathEntry[] = [];
+  for (const e of parsedAll) {
+    try {
+      const inserted = await insertIfNew(env, e);
+      if (inserted) newOnes.push(e);
+    } catch (err2) {
+      console.warn('Insert failed', e.wiki_path, err2);
     }
   }
 
