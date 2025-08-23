@@ -7,6 +7,12 @@ export interface Env {
   REPLICATE_WEBHOOK_SECRET?: string;
   MANUAL_RUN_SECRET: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  // X (Twitter) OAuth 2.0 credentials and encryption key
+  // X_CLIENT_ID is required to initiate OAuth (PKCE). X_CLIENT_SECRET is optional (used when supported).
+  X_CLIENT_ID?: string;
+  X_CLIENT_SECRET?: string;
+  // Symmetric key (base64) to encrypt tokens at rest in D1
+  X_ENC_KEY?: string;
   // Optional: configure rate limits for /run as "60:3,3600:20"
   RUN_RATE_LIMITS?: string;
   ASSETS: Fetcher; // bound by Wrangler for static assets

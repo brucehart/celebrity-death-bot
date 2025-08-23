@@ -13,6 +13,7 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 3. **Stores in D1**: Entries are stored in a D1 database. Items already in the database are ignored.
 4. **LLM evaluation**: Newly discovered entries are sent to Replicate for LLM evaluation. The worker exposes a webhook to receive callbacks from Replicate.
 5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to subscribed chats.
+6. **X (Twitter) posting**: If X OAuth 2.0 is connected, each approved result is also posted to the timeline.
 
 ## Configuration
 
@@ -25,6 +26,12 @@ The worker expects the following bindings and environment variables:
 - `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret. When set, the
   worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
+- X (Twitter) OAuth 2.0 (PKCE) configuration:
+  - `X_CLIENT_ID` – OAuth 2.0 client ID for your X App
+  - `X_CLIENT_SECRET` – (optional) client secret; included when present
+  - `X_ENC_KEY` – base64 AES-256-GCM key to encrypt tokens in D1
+
+When connected once via OAuth 2.0, the worker stores and refreshes tokens and posts via `POST /2/tweets` with a Bearer token.
 
 ### Cron schedule
 
@@ -136,6 +143,34 @@ Notes
   );
   ```
 - Add secrets via Wrangler: `wrangler secret put TELEGRAM_WEBHOOK_SECRET` and ensure `TELEGRAM_BOT_TOKEN` is set.
+
+## X (Twitter) Posting
+
+The worker can post each Replicate-approved death to X (Twitter) at `x.com/CelebDeathBot`.
+
+- Format matches Telegram, but the Wikipedia link is appended at the end (since X posts cannot embed clickable HTML links):
+  - Example: `🚨💀Jane Doe (88) : American actor and philanthropist - cancer 💀🚨\nhttps://en.wikipedia.org/wiki/Jane_Doe`
+- Length is constrained to 280 characters with t.co URL weighting (23 chars). The body text is truncated with an ellipsis if necessary.
+
+Setup (OAuth 2.0, PKCE)
+- In your X developer app, enable OAuth 2.0 user auth with scopes: `tweet.read tweet.write users.read offline.access`.
+- Store secrets (never commit these):
+  ```bash
+  wrangler secret put X_CLIENT_ID
+  wrangler secret put X_CLIENT_SECRET   # optional; included when present
+  wrangler secret put X_ENC_KEY         # base64 32-byte key for AES-GCM
+  ```
+- Apply the migration for token storage:
+  ```bash
+  wrangler d1 execute celebrity-death-bot --file=./migrations/004_create_x_oauth.sql
+  ```
+- Connect the bot account by visiting:
+  - `GET ${BASE_URL}/x/oauth/start` → authorizes via X; callback goes to `${BASE_URL}/x/oauth/callback`.
+  - Verify status: `GET ${BASE_URL}/x/oauth/status` → `{ connected: true, expires_at: <unix> }`.
+
+Security notes
+- Access and refresh tokens are encrypted at rest in D1 via AES-256-GCM using `X_ENC_KEY`.
+- Tokens are auto-refreshed as they near expiry; no interactive login is needed after the first connect.
 
 ## Replicate Webhook Signing (HMAC)
 

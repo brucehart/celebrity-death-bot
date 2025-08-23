@@ -9,11 +9,15 @@ import { manualRun } from './routes/run.ts';
 import { telegramWebhook } from './routes/telegram-webhook.ts';
 import { health } from './routes/health.ts';
 import { runJob } from './services/job.ts';
+import { xOauthStart, xOauthCallback, xOauthStatus } from './services/x.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
   .on('POST', '/telegram/webhook', (req, env) => telegramWebhook(req, env))
   .on('POST', '/run', (req, env) => manualRun(req, env))
+  .on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
+  .on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(env, req.url, env.BASE_URL))
+  .on('GET', '/x/oauth/status', (_req, env) => xOauthStatus(env))
   .on('GET', '/health', () => health());
 
 export default {
