@@ -3,6 +3,7 @@ import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/
 import { toStr } from '../utils/strings.ts';
 import { updateDeathLLM } from '../services/db.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
+import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
 
 export async function replicateCallback(request: Request, env: Env): Promise<Response> {
@@ -60,6 +61,9 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 
     const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path });
     await notifyTelegram(env, msg);
+    // Post to X.com if credentials are configured; mirrors Telegram format
+    const xText = buildXStatus({ name, age, description: desc, cause, wiki_path });
+    await postToXIfConfigured(env, xText);
     notified++;
 
     if (wiki_path) {

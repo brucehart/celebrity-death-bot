@@ -13,6 +13,7 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 3. **Stores in D1**: Entries are stored in a D1 database. Items already in the database are ignored.
 4. **LLM evaluation**: Newly discovered entries are sent to Replicate for LLM evaluation. The worker exposes a webhook to receive callbacks from Replicate.
 5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to subscribed chats.
+6. **X (Twitter) posting**: If X credentials are configured, each approved result is also posted to the timeline.
 
 ## Configuration
 
@@ -25,6 +26,13 @@ The worker expects the following bindings and environment variables:
 - `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret. When set, the
   worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
+\- Optional X (Twitter) credentials for posting Tweets (OAuth 1.0a user context):
+  - `X_API_KEY` – Consumer API key
+  - `X_API_SECRET` – Consumer API secret
+  - `X_ACCESS_TOKEN` – User access token
+  - `X_ACCESS_TOKEN_SECRET` – User access token secret
+
+When all four X credentials are present, the worker posts to `POST /2/tweets` using OAuth 1.0a. If any are missing, X posting is skipped.
 
 ### Cron schedule
 
@@ -136,6 +144,31 @@ Notes
   );
   ```
 - Add secrets via Wrangler: `wrangler secret put TELEGRAM_WEBHOOK_SECRET` and ensure `TELEGRAM_BOT_TOKEN` is set.
+
+## X (Twitter) Posting
+
+The worker can post each Replicate-approved death to X (Twitter) at `x.com/CelebDeathBot`.
+
+- Format matches Telegram, but the Wikipedia link is appended at the end (since X posts cannot embed clickable HTML links):
+  - Example: `🚨💀Jane Doe (88) : American actor and philanthropist - cancer 💀🚨\nhttps://en.wikipedia.org/wiki/Jane_Doe`
+- Length is constrained to 280 characters with t.co URL weighting (23 chars). The body text is truncated with an ellipsis if necessary.
+
+Setup (OAuth 1.0a user context)
+- In your X developer app, create or obtain:
+  - Consumer API key and secret
+  - User access token and access token secret (for @CelebDeathBot)
+- Store them as Worker secrets (never commit these):
+  ```bash
+  wrangler secret put X_API_KEY
+  wrangler secret put X_API_SECRET
+  wrangler secret put X_ACCESS_TOKEN
+  wrangler secret put X_ACCESS_TOKEN_SECRET
+  ```
+- No additional configuration is required. When these are present, the worker signs requests with HMAC-SHA1 and posts via `POST https://api.twitter.com/2/tweets`.
+
+Security notes
+- Secrets are stored by Cloudflare and only available at runtime; they are never logged.
+- OAuth 1.0a user tokens do not expire, simplifying headless posting from a Worker.
 
 ## Replicate Webhook Signing (HMAC)
 
