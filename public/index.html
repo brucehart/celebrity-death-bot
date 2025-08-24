@@ -6,6 +6,8 @@
     <title>Celebrity Death Bot</title>
     <meta name="description" content="Automated updates of notable deaths sourced from Wikipedia. Generally accurate—mistakes can happen." />
     <link rel="preload" as="image" href="/CelebDeathBot-Header.png" />
+    <!-- Previewbox: lightweight web component for rich link previews -->
+    <script src="https://cdn.jsdelivr.net/npm/@mariusbongarts/previewbox/dist/link/index.min.js"></script>
     <style>
       :root {
         --bg: #f7f8fb;
@@ -46,6 +48,7 @@
       .date-sep { position: sticky; top: 0; background: var(--panel); border: 1px solid var(--divider); color: var(--muted); padding: 6px 10px; margin: 12px 0 10px; border-radius: 999px; width: max-content; box-shadow: 0 10px 20px rgba(0,0,0,0.08); }
       .item { border: 1px solid var(--divider); border-radius: 12px; padding: 14px; margin-bottom: 10px; background: var(--panel); }
       .item .time { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+      previewbox-link { display: block; margin-top: 10px; }
 
       .pagination { display: flex; gap: 10px; justify-content: center; margin: 18px 0 10px; }
       .pagination a { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--divider); background: var(--panel); color: var(--text); font-weight: 600; }
@@ -142,6 +145,21 @@
           time.className = 'time';
           time.textContent = new Date(it.posted_at.replace(' ', 'T') + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           li.appendChild(content);
+          // Ensure links open in new tabs and add preview card for Wikipedia links
+          const a = content.querySelector('a[href]');
+          if (a) {
+            try { a.target = '_blank'; a.rel = 'noopener noreferrer'; } catch {}
+            try {
+              const url = new URL(a.getAttribute('href') || '', location.origin);
+              if (/\.wikipedia\.org$/i.test(url.hostname)) {
+                const preview = document.createElement('previewbox-link');
+                preview.setAttribute('url', url.href);
+                // Insert after the text content
+                li.appendChild(preview);
+              }
+            } catch {}
+          }
+          
           li.appendChild(time);
           ul.appendChild(li);
         }
