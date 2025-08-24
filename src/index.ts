@@ -10,11 +10,16 @@ import { telegramWebhook } from './routes/telegram-webhook.ts';
 import { health } from './routes/health.ts';
 import { runJob } from './services/job.ts';
 import { xOauthStart, xOauthCallback, xOauthStatus } from './services/x.ts';
+import { getRecentPosts } from './routes/posts.ts';
+import { getMeta } from './routes/meta.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
   .on('POST', '/telegram/webhook', (req, env) => telegramWebhook(req, env))
   .on('POST', '/run', (req, env) => manualRun(req, env))
+  .on('GET', '/', (_req, env) => env.ASSETS.fetch(new Request('index.html')))
+  .on('GET', '/api/posts', (req, env) => getRecentPosts(req, env))
+  .on('GET', '/api/meta', (_req, env) => getMeta(env))
   .on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
   .on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(env, req.url, env.BASE_URL))
   .on('GET', '/x/oauth/status', (_req, env) => xOauthStatus(env))
@@ -40,6 +45,13 @@ export default {
     if (url.pathname === '/privacy' && request.method === 'GET') {
       return env.ASSETS.fetch(new Request('privacy.html', request));
     }
-    return router.handle(request, env, ctx);
+    // Route first
+    const res = await router.handle(request, env, ctx);
+    // Fallback to static assets (images, CSS, etc.) when route not found
+    if (res.status === 404) {
+      const asset = await env.ASSETS.fetch(request);
+      return asset;
+    }
+    return res;
   },
 };

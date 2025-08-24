@@ -15,6 +15,9 @@ export interface Env {
   X_ENC_KEY?: string;
   // Optional: configure rate limits for /run as "60:3,3600:20"
   RUN_RATE_LIMITS?: string;
+  // Optional: site links for homepage
+  X_PROFILE_URL?: string;
+  TELEGRAM_BOT_URL?: string;
   ASSETS: Fetcher; // bound by Wrangler for static assets
 }
 

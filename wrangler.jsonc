@@ -25,7 +25,9 @@
    * BASE_URL is the public URL for this Worker, used by the Replicate webhook.
    */
   "vars": {    
-    "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev"
+    "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev",
+    "X_PROFILE_URL": "",
+    "TELEGRAM_BOT_URL": ""
   },
 
   // Optional but nice for debugging in the dashboard
