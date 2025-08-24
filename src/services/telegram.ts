@@ -90,7 +90,7 @@ export function buildTelegramMessage({ name, age, description, cause, wiki_path 
   const safeHref = escapeHtmlAttr(url);
 
   const parts: string[] = [];
-  parts.push('🚨💀');
+  parts.push('🚨💀 ');
   parts.push(`<a href="${safeHref}">${safeName}</a>`);
   if (safeAge) parts.push(` (${safeAge})`);
   if (safeDesc) parts.push(` : ${safeDesc}`);

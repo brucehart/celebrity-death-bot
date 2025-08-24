@@ -222,7 +222,7 @@ export function buildXStatus({ name, age, description, cause, wiki_path }: PostI
   const url = buildSafeUrl(wiki_path || '');
 
   const bodyParts: string[] = [];
-  bodyParts.push('🚨💀');
+  bodyParts.push('🚨💀 ');
   bodyParts.push(safeName);
   if (safeAge) bodyParts.push(safeAge);
   if (safeDesc) bodyParts.push(` : ${safeDesc}`);
