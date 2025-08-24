@@ -73,23 +73,8 @@ async function decryptJson(env: Env, payload: { iv: string; ct: string }): Promi
 }
 
 // ---------- D1 helpers ----------
-
-async function ensureTables(env: Env) {
-  await env.DB.exec(`
-    CREATE TABLE IF NOT EXISTS oauth_sessions (
-      state TEXT PRIMARY KEY,
-      code_verifier TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      provider TEXT PRIMARY KEY,
-      data TEXT NOT NULL,
-      expires_at INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-}
+// Tables are created via D1 migrations (see migrations/004_create_x_oauth.sql).
+// We no longer attempt to create tables at request time to avoid exec/parse issues.
 
 async function saveSession(env: Env, state: string, codeVerifier: string) {
   await env.DB.prepare(`INSERT OR REPLACE INTO oauth_sessions(state, code_verifier, created_at) VALUES(?, ?, CURRENT_TIMESTAMP)`).bind(state, codeVerifier).run();
@@ -168,7 +153,6 @@ async function refreshIfNeeded(env: Env): Promise<string | null> {
 export async function xOauthStart(env: Env, baseUrl: string): Promise<Response> {
   if (!env.X_CLIENT_ID) return new Response('X_CLIENT_ID not configured', { status: 500 });
   if (!env.X_ENC_KEY) return new Response('X_ENC_KEY must be set to securely store tokens', { status: 500 });
-  await ensureTables(env);
   const redirectUri = new URL('/x/oauth/callback', baseUrl).toString();
   const state = randB64Url(24);
   const verifier = randB64Url(64);
@@ -186,7 +170,6 @@ export async function xOauthStart(env: Env, baseUrl: string): Promise<Response> 
 }
 
 export async function xOauthCallback(env: Env, requestUrl: string, baseUrl: string): Promise<Response> {
-  await ensureTables(env);
   const url = new URL(requestUrl);
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state') || '';
@@ -219,7 +202,6 @@ export async function xOauthCallback(env: Env, requestUrl: string, baseUrl: stri
 }
 
 export async function xOauthStatus(env: Env): Promise<Response> {
-  await ensureTables(env);
   const rec = await getTokens(env);
   const ok = !!rec?.payload?.access_token;
   const exp = rec?.expires_at ?? null;
@@ -282,4 +264,3 @@ export async function postToXIfConfigured(env: Env, text: string): Promise<void>
     console.warn('X post error', (err as any)?.message || String(err));
   }
 }
-
