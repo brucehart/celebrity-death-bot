@@ -20,6 +20,13 @@
     }
   ],
 
+  "kv_namespaces": [
+    {
+      "binding": "celebrity_death_bot_kv",
+      "id": "ca8f1e42390e42bba974529aa399fea7"
+    }
+  ],
+
   /**
    * Environment Variables (non-secrets)   
    * BASE_URL is the public URL for this Worker, used by the Replicate webhook.
