@@ -32,15 +32,13 @@ export function escapeHtmlAttr(s: unknown): string {
 
 export function buildSafeUrl(wikiPath: string): string {
   try {
-    const base = new URL('https://www.wikipedia.org');
     if (typeof wikiPath === 'string' && wikiPath.trim()) {
-      if (wikiPath.startsWith('http')) return new URL(wikiPath).href;
-      const path = wikiPath.startsWith('/') ? wikiPath : `/${wikiPath}`;
-      return new URL(path, base).href;
+      const id = wikiPath.replace(/^\/*wiki\//, '');
+      return new URL(`https://en.wikipedia.org/wiki/${id}`).href;
     }
-    return base.href;
+    return '';
   } catch {
-    return 'https://www.wikipedia.org/';
+    return '';
   }
 }
 
@@ -77,21 +75,23 @@ type TelegramMessageInput = {
   description?: string | null;
   cause?: string | null;
   wiki_path?: string | null;
+  link_type?: 'active' | 'edit' | null;
 };
 
-export function buildTelegramMessage({ name, age, description, cause, wiki_path }: TelegramMessageInput): string {
+export function buildTelegramMessage({ name, age, description, cause, wiki_path, link_type }: TelegramMessageInput): string {
   const safeName = escapeHtmlText(name || '');
   const safeAge = typeof age === 'string' ? escapeHtmlText(age) : age != null ? escapeHtmlText(String(age)) : '';
   const safeDesc = escapeHtmlText(description || '');
   const causeRaw = (cause ?? '').toString();
   const isUnknown = causeRaw.trim().toLowerCase() === 'unknown';
   const safeCause = isUnknown ? '' : escapeHtmlText(causeRaw);
-  const url = buildSafeUrl(wiki_path || '');
-  const safeHref = escapeHtmlAttr(url);
+  const url = link_type === 'active' && wiki_path ? buildSafeUrl(wiki_path || '') : '';
+  const safeHref = url ? escapeHtmlAttr(url) : '';
 
   const parts: string[] = [];
   parts.push('🚨💀 ');
-  parts.push(`<a href="${safeHref}">${safeName}</a>`);
+  if (safeHref) parts.push(`<a href="${safeHref}">${safeName}</a>`);
+  else parts.push(`${safeName}`);
   if (safeAge) parts.push(` (${safeAge})`);
   if (safeDesc) parts.push(` : ${safeDesc}`);
   if (safeCause) parts.push(` - ${safeCause}`);

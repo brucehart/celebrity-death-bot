@@ -21,7 +21,7 @@ export async function getRecentPosts(request: Request, env: Env): Promise<Respon
   const before = beforeParam ? unb64(beforeParam) : '';
 
   const binds: any[] = [];
-  let sql = `SELECT name, wiki_path, age, description, cause, llm_date_time as posted_at
+  let sql = `SELECT name, wiki_path, link_type, age, description, cause, llm_date_time as posted_at
              FROM deaths
              WHERE llm_result = 'yes' AND llm_date_time IS NOT NULL`;
   if (before) {
@@ -34,6 +34,7 @@ export async function getRecentPosts(request: Request, env: Env): Promise<Respon
   const res = await env.DB.prepare(sql).bind(...binds).all<{
     name: string;
     wiki_path: string;
+    link_type: 'active' | 'edit';
     age: number | null;
     description: string | null;
     cause: string | null;
@@ -51,6 +52,7 @@ export async function getRecentPosts(request: Request, env: Env): Promise<Respon
       description: r.description,
       cause: r.cause,
       wiki_path: r.wiki_path,
+      link_type: r.link_type,
     });
     return {
       name: r.name,
@@ -58,6 +60,7 @@ export async function getRecentPosts(request: Request, env: Env): Promise<Respon
       description: r.description,
       cause: r.cause,
       wiki_path: r.wiki_path,
+      link_type: r.link_type,
       posted_at: r.posted_at,
       html,
     };
@@ -67,4 +70,3 @@ export async function getRecentPosts(request: Request, env: Env): Promise<Respon
 
   return Response.json({ ok: true, count: items.length, items, nextBefore, hasMore });
 }
-

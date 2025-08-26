@@ -16,7 +16,8 @@ test('parseWikipedia extracts name, wiki_path, age, description', () => {
 
   assert.deepEqual(rows[0], {
     name: 'Jane Doe',
-    wiki_path: '/wiki/Jane_Doe',
+    wiki_path: 'Jane_Doe',
+    link_type: 'active',
     age: 88,
     description: 'American actor and philanthropist',
     cause: null,
@@ -24,10 +25,10 @@ test('parseWikipedia extracts name, wiki_path, age, description', () => {
 
   assert.deepEqual(rows[1], {
     name: 'John Smith',
-    wiki_path: '/wiki/John_Smith',
+    wiki_path: 'John_Smith',
+    link_type: 'active',
     age: 54,
     description: 'English footballer, cancer',
     cause: null,
   });
 });
-

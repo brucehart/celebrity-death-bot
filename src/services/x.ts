@@ -211,15 +211,15 @@ export async function xOauthStatus(env: Env): Promise<Response> {
 // ---------- Posting ----------
 
 // Build X post matching Telegram content, but with the Wikipedia link appended at the end.
-type PostInput = { name?: string | null; age?: string | number | null; description?: string | null; cause?: string | null; wiki_path?: string | null };
+type PostInput = { name?: string | null; age?: string | number | null; description?: string | null; cause?: string | null; wiki_path?: string | null; link_type?: 'active' | 'edit' | null };
 
-export function buildXStatus({ name, age, description, cause, wiki_path }: PostInput): string {
+export function buildXStatus({ name, age, description, cause, wiki_path, link_type }: PostInput): string {
   const safeName = (name ?? '').toString().trim();
   const safeAge = age == null || age === '' ? '' : ` (${String(age).trim()})`;
   const safeDesc = (description ?? '').toString().trim();
   const causeRaw = (cause ?? '').toString().trim();
   const hasCause = causeRaw && causeRaw.toLowerCase() !== 'unknown';
-  const url = buildSafeUrl(wiki_path || '');
+  const url = link_type === 'active' && wiki_path ? buildSafeUrl(wiki_path || '') : '';
 
   const bodyParts: string[] = [];
   bodyParts.push('🚨💀 ');
@@ -230,10 +230,13 @@ export function buildXStatus({ name, age, description, cause, wiki_path }: PostI
   bodyParts.push(' 💀🚨');
   const body = bodyParts.join('');
 
-  // Respect 280-char limit using t.co link weighting.
-  const maxBody = TWEET_MAX - 1 - LINK_WEIGHT; // newline + link
-  const truncatedBody = truncateToCodepoints(body, maxBody);
-  return `${truncatedBody}\n${url}`;
+  if (url) {
+    // Respect 280-char limit using t.co link weighting when we include a link.
+    const maxBody = TWEET_MAX - 1 - LINK_WEIGHT; // newline + link
+    const truncatedBody = truncateToCodepoints(body, maxBody);
+    return `${truncatedBody}\n${url}`;
+  }
+  return truncateToCodepoints(body, TWEET_MAX);
 }
 
 function truncateToCodepoints(s: string, max: number): string {

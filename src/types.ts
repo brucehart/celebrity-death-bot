@@ -23,7 +23,10 @@ export interface Env {
 
 export type DeathEntry = {
   name: string;
+  // Only the Wikipedia ID (no leading /wiki/), e.g. "Peter_Doyle_(cyclist)" or "Greg_O%27Connell" or "Starling_Lawrence"
   wiki_path: string;
+  // Whether the link is an actual article (active) or an edit/redlink action (edit)
+  link_type: 'active' | 'edit';
   age: number | null;
   description: string | null;
   cause: string | null;

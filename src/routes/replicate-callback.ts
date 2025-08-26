@@ -1,7 +1,7 @@
 import type { Env } from '../types.ts';
 import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/json.ts';
 import { toStr } from '../utils/strings.ts';
-import { updateDeathLLM } from '../services/db.ts';
+import { getLinkTypeMap, setLLMNoFor, updateDeathLLM } from '../services/db.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
@@ -47,10 +47,17 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 
   const items: Array<Record<string, unknown>> = normalizeToArray(parsed);
   if (!items.length) {
+    // If we can detect candidates, mark them as 'no'
+    const metaCandidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
+    if (metaCandidates.length) {
+      await setLLMNoFor(env, metaCandidates);
+    }
     return Response.json({ ok: true, notified: 0 });
   }
 
   let notified = 0;
+  const selectedPaths: string[] = items.map((it) => toStr(it['wiki_path'])).filter(Boolean);
+  const linkTypeMap = await getLinkTypeMap(env, selectedPaths);
   for (const it of items) {
     const name = toStr(it['name']);
     if (!name) continue;
@@ -58,17 +65,25 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     const desc = toStr(it['description']);
     const cause = toStr(it['cause of death'] ?? it['cause_of_death'] ?? (it as any).causeOfDeath ?? it['cause']);
     const wiki_path = toStr(it['wiki_path']);
+    const link_type = wiki_path ? (linkTypeMap[wiki_path] || 'active') : 'active';
 
-    const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path });
+    const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path, link_type });
     await notifyTelegram(env, msg);
     // Post to X.com if credentials are configured; mirrors Telegram format
-    const xText = buildXStatus({ name, age, description: desc, cause, wiki_path });
+    const xText = buildXStatus({ name, age, description: desc, cause, wiki_path, link_type });
     await postToXIfConfigured(env, xText);
     notified++;
 
     if (wiki_path) {
       await updateDeathLLM(env, wiki_path, cause);
     }
+  }
+
+  // Mark any candidates not selected as 'no'
+  const candidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
+  if (candidates.length) {
+    const notSelected = candidates.filter((c: string) => !selectedPaths.includes(c));
+    if (notSelected.length) await setLLMNoFor(env, notSelected);
   }
 
   return Response.json({ ok: true, notified });

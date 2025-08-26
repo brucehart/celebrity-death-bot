@@ -8,21 +8,21 @@ const msg = buildTelegramMessage({
   age: 77,
   description: 'Rock & roll <legend>',
   cause: 'heart <failure> & complications',
-  wiki_path: '/wiki/Test_(person)'
+  wiki_path: 'Test_(person)',
+  link_type: 'active'
 });
 console.log('message:', msg);
 
 const name = 'X'.repeat(50);
-const m = `🚨💀<a href="https://www.wikipedia.org/wiki/Foo">${name}</a> : description 💀🚨`;
+const m = `🚨💀<a href="https://en.wikipedia.org/wiki/Foo">${name}</a> : description 💀🚨`;
 console.log('trunc:', truncateTelegramHTML(m, 40));
 
 const longDesc = 'd'.repeat(5000);
-const m2 = buildTelegramMessage({ name: 'Person', age: '99', description: longDesc, cause: '', wiki_path: '/wiki/Person' });
+const m2 = buildTelegramMessage({ name: 'Person', age: '99', description: longDesc, cause: '', wiki_path: 'Person', link_type: 'active' });
 console.log('len:', m2.length, 'last:', m2.at(-1));
 
-const m3 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'unknown', wiki_path: '/wiki/Test' });
+const m3 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'unknown', wiki_path: 'Test', link_type: 'active' });
 console.log('hasCauseUnknown:', m3.includes(' - '));
 
-const m4 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'Unknown', wiki_path: '/wiki/Test' });
+const m4 = buildTelegramMessage({ name: 'Test', age: 42, description: 'desc', cause: 'Unknown', wiki_path: 'Test', link_type: 'active' });
 console.log('hasCauseUnknown2:', m4.includes(' - '));
-

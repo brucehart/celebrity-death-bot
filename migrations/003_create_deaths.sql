@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS deaths (
 	age INTEGER,
 	description TEXT,
 	cause TEXT,
-	llm_result TEXT NOT NULL DEFAULT 'no', -- 'no' until confirmed by LLM callback
+	llm_result TEXT NOT NULL DEFAULT 'pending', -- 'pending' until Replicate callback decides 'yes' or 'no'
 	llm_date_time TEXT,
 	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE (wiki_path)
@@ -16,4 +16,3 @@ CREATE TABLE IF NOT EXISTS deaths (
 
 -- Helpful index if you plan to query by LLM state
 CREATE INDEX IF NOT EXISTS idx_deaths_llm_result ON deaths(llm_result);
-

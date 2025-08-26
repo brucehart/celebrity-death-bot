@@ -48,7 +48,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
 
 export async function callReplicate(env: Env, prompt: string) {
   const cfg = getConfig(env);
-  const body = {
+  const body: any = {
     stream: false,
     input: {
       prompt,
@@ -61,6 +61,20 @@ export async function callReplicate(env: Env, prompt: string) {
     webhook: `${cfg.baseUrl}/replicate/callback`,
     webhook_events_filter: ['completed'],
   };
+  // Attach minimal metadata to identify the batch candidates by wiki_path.
+  if ((prompt || '').includes('Input (each line:')) {
+    // Best-effort extraction of wiki_paths from prompt for metadata redundancy.
+    const m = /Input \(each line:[\s\S]*?----\n([\s\S]*?)\n----/m.exec(prompt);
+    if (m && m[1]) {
+      const candidates = m[1]
+        .split(/\n\n+/)
+        .map((line) => line.trim())
+        .map((line) => line.split(',').pop() || '')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      (body as any).metadata = { candidates };
+    }
+  }
 
   const res = await fetchWithRetry('https://api.replicate.com/v1/models/openai/gpt-5-mini/predictions', {
     method: 'POST',
