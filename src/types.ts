@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  celebrity_death_bot_kv: KVNamespace;
 
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
