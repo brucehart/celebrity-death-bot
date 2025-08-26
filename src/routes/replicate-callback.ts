@@ -79,6 +79,11 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     }
   }
 
-  await env.DB.prepare(`UPDATE deaths SET llm_result = 'no' WHERE llm_result = 'pending'`).run();    
+  // Mark any candidates not selected as 'no' for this callback only
+  const candidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
+  if (candidates.length) {
+    const notSelected = candidates.filter((c: string) => !selectedPaths.includes(c));
+    if (notSelected.length) await setLLMNoFor(env, notSelected);
+  }
   return Response.json({ ok: true, notified });
 }
