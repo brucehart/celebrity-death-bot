@@ -2,6 +2,7 @@ import type { Env } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getTelegramChatIds } from './db.ts';
 import { getConfig } from '../config.ts';
+import { buildSafeUrl } from '../utils/strings.ts';
 
 // Telegram HTML message helpers (TypeScript)
 // - Escapes unsafe characters in text and attribute contexts
@@ -30,18 +31,6 @@ export function escapeHtmlAttr(s: unknown): string {
     .replace(/>/g, '&gt;');
 }
 
-export function buildSafeUrl(wikiPath: string): string {
-  try {
-    if (typeof wikiPath === 'string' && wikiPath.trim()) {
-      const id = wikiPath.replace(/^\/*wiki\//, '');
-      return new URL(`https://en.wikipedia.org/wiki/${id}`).href;
-    }
-    return '';
-  } catch {
-    return '';
-  }
-}
-
 export function truncateTelegramHTML(html: string, maxLen: number = MAX_TELEGRAM_LEN): string {
   if (!html) return '';
   if (html.length <= maxLen) return html;
@@ -50,9 +39,24 @@ export function truncateTelegramHTML(html: string, maxLen: number = MAX_TELEGRAM
   let allowed = maxLen - ellipsis.length;
   if (allowed <= 0) return html.slice(0, maxLen);
 
+  const anchorStart = html.indexOf('<a ');
+  const anchorOpenEnd = anchorStart !== -1 ? html.indexOf('>', anchorStart) : -1; // end index of opening tag
   const anchorEnd = html.indexOf('</a>');
-  if (anchorEnd !== -1 && allowed <= anchorEnd + 4) {
-    return html.slice(0, anchorEnd + 4) + ellipsis;
+  if (anchorEnd !== -1 && allowed <= anchorEnd + 4 && anchorOpenEnd !== -1 && anchorOpenEnd < anchorEnd) {
+    // We are cutting inside the anchor; keep a well-formed anchor and ensure total length <= maxLen.
+    let pre = html.slice(0, anchorOpenEnd + 1); // includes '<a ...>'
+    const close = html.slice(anchorEnd, anchorEnd + 4); // '</a>'
+    // If the opening tag alone already exceeds budget, degrade to minimal '<a>'
+    if (pre.length + close.length + ellipsis.length > maxLen) {
+      pre = '<a>';
+    }
+    const budgetForText = Math.max(0, maxLen - (pre.length + close.length + ellipsis.length));
+    const fullText = html.slice(anchorOpenEnd + 1, anchorEnd);
+    let text = fullText.slice(0, budgetForText);
+    // try to cut on a word boundary when possible
+    const ws = text.lastIndexOf(' ');
+    if (ws > 0 && ws > Math.floor(budgetForText * 0.6)) text = text.slice(0, ws);
+    return pre + text + close + ellipsis;
   }
 
   let cut = allowed;
@@ -89,13 +93,13 @@ export function buildTelegramMessage({ name, age, description, cause, wiki_path,
   const safeHref = url ? escapeHtmlAttr(url) : '';
 
   const parts: string[] = [];
-  parts.push('🚨💀 ');
+  parts.push('🚨💀');
   if (safeHref) parts.push(`<a href="${safeHref}">${safeName}</a>`);
   else parts.push(`${safeName}`);
   if (safeAge) parts.push(` (${safeAge})`);
   if (safeDesc) parts.push(` : ${safeDesc}`);
   if (safeCause) parts.push(` - ${safeCause}`);
-  parts.push(' 💀🚨');
+  parts.push('💀🚨');
 
   const msg = parts.join('');
   return truncateTelegramHTML(msg, MAX_TELEGRAM_LEN);

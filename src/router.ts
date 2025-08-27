@@ -1,7 +1,7 @@
 import type { Env } from './types.ts';
 
-// Tiny string-matching router for Worker routes.
-// Keep this minimal to avoid overhead and complexity.
+// Tiny exact-match router for Worker routes.
+// - Matches method + pathname exactly (no params, no patterns). Keep minimal to avoid overhead.
 type Handler = (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response> | Response;
 
 export class Router {

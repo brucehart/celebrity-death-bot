@@ -1,6 +1,6 @@
 import type { Env } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
-import { buildSafeUrl } from './telegram.ts';
+import { buildSafeUrl } from '../utils/strings.ts';
 
 // OAuth 2.0 (PKCE) based X (Twitter) posting support.
 // - Token storage is encrypted at rest using AES-GCM with a symmetric key from X_ENC_KEY (base64).

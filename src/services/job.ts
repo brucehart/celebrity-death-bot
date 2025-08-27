@@ -6,6 +6,11 @@ import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUnique, uniqueSorted, tryAcquireMonthLock, releaseMonthLock } from './kv-monthly.ts';
 
+// Orchestrates a single scan-and-notify run:
+// 1) Fetch the current (and early-month previous) Wikipedia "Deaths in <Month> <Year>" pages.
+// 2) Parse entries, compare with a monthly KV cache to identify truly new wiki_paths.
+// 3) Insert new rows into D1 in a safe batch and enqueue LLM filtering via Replicate.
+
 export async function runJob(env: Env) {
   const cfg = getConfig(env);
   const year = toNYYear();
