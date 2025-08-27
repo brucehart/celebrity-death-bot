@@ -37,8 +37,8 @@
    */
   "vars": {    
     "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev",
-    "X_PROFILE_URL": "",
-    "TELEGRAM_BOT_URL": ""
+    "X_PROFILE_URL": "https://x.com/CelebDeathBot",
+    "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot"
   },
 
   // Optional but nice for debugging in the dashboard
