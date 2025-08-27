@@ -1,53 +1,57 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { toNYYear, parseWikipedia } from './wiki.ts';
-import { insertIfNew } from './db.ts';
+import { insertBatchReturningNew } from './db.ts';
 import { buildReplicatePrompt, callReplicate } from './replicate.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
+import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUnique, uniqueSorted, tryAcquireMonthLock, releaseMonthLock } from './kv-monthly.ts';
 
 export async function runJob(env: Env) {
   const cfg = getConfig(env);
   const year = toNYYear();
 
-  // Always scan the yearly page; during the first 5 days of a month,
-  // also scan the previous month's page to catch delayed updates.
-  const urls: string[] = [`https://en.wikipedia.org/wiki/Deaths_in_${year}`];
-
+  // Determine target months in America/New_York tz
+  const monthNY = Number(
+    new Date().toLocaleString('en-US', {
+      timeZone: cfg.tz,
+      month: 'numeric',
+    })
+  );
   const dayNY = Number(
     new Date().toLocaleString('en-US', {
       timeZone: cfg.tz,
       day: 'numeric',
     })
   );
+  const targets: YearMonth[] = [{ year, month: monthNY }];
   if (!Number.isNaN(dayNY) && dayNY <= 5) {
-    const monthNY = Number(
-      new Date().toLocaleString('en-US', {
-        timeZone: cfg.tz,
-        month: 'numeric',
-      })
-    );
-    const prevMonthIndex = monthNY === 1 ? 12 : monthNY - 1; // 1-12
+    const prevMonth = monthNY === 1 ? 12 : monthNY - 1;
     const prevYear = monthNY === 1 ? year - 1 : year;
-    const monthNames = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-    const prevMonthName = monthNames[prevMonthIndex - 1];
-    urls.push(`https://en.wikipedia.org/wiki/Deaths_in_${prevMonthName}_${prevYear}`);
+    targets.push({ year: prevYear, month: prevMonth });
   }
 
-  const parsedAll: DeathEntry[] = [];
-  for (const targetUrl of urls) {
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  const allNewEntries: DeathEntry[] = [];
+  let totalParsed = 0;
+
+  for (const ym of targets) {
+    const monthName = monthNames[ym.month - 1];
+    const targetUrl = `https://en.wikipedia.org/wiki/Deaths_in_${monthName}_${ym.year}`;
+
     const res = await fetchWithRetry(
       targetUrl,
       {
@@ -61,24 +65,45 @@ export async function runJob(env: Env) {
 
     const html = await res.text();
     const parsed = parseWikipedia(html);
-    parsedAll.push(...parsed);
-  }
+    totalParsed += parsed.length;
 
-  // Per-row check and insert: SELECT by wiki_path, then INSERT if new
-  const newOnes: DeathEntry[] = [];
-  for (const e of parsedAll) {
-    try {
-      const inserted = await insertIfNew(env, e);
-      if (inserted) newOnes.push(e);
-    } catch (err2) {
-      console.warn('Insert failed', e.wiki_path, err2);
+    // Build sorted sets for KV comparison
+    const scrapedSorted = uniqueSorted(parsed.map((e) => e.wiki_path));
+    const existingSorted = uniqueSorted(await getMonthlyPaths(env, ym));
+    const newPaths = diffSorted(existingSorted, scrapedSorted);
+
+    if (newPaths.length) {
+      // Map wiki_path -> entry for quick filter
+      const map: Record<string, DeathEntry> = {};
+      for (const e of parsed) {
+        if (!map[e.wiki_path]) map[e.wiki_path] = e;
+      }
+      for (const p of newPaths) {
+        const row = map[p];
+        if (row) allNewEntries.push(row);
+      }
+
+      // Try to update month KV under a short-lived lock
+      const gotLock = await tryAcquireMonthLock(env, ym);
+      try {
+        if (gotLock) {
+          const latestExisting = uniqueSorted(await getMonthlyPaths(env, ym));
+          const merged = mergeSortedUnique(latestExisting, uniqueSorted(newPaths));
+          await putMonthlyPaths(env, ym, merged);
+        }
+      } finally {
+        if (gotLock) await releaseMonthLock(env, ym);
+      }
     }
   }
 
-  if (newOnes.length > 0) {
-    const prompt = buildReplicatePrompt(newOnes);
+  // Insert into D1 with a single batched operation that returns the newly inserted rows
+  const insertedRows = await insertBatchReturningNew(env, allNewEntries);
+
+  if (insertedRows.length > 0) {
+    const prompt = buildReplicatePrompt(insertedRows);
     await callReplicate(env, prompt);
   }
 
-  return { scanned: parsedAll.length, inserted: newOnes.length };
+  return { scanned: totalParsed, inserted: insertedRows.length };
 }

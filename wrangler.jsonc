@@ -27,7 +27,7 @@
       "id": "ca8f1e42390e42bba974529aa399fea7",
       // IMPORTANT: Use a separate preview_id for local dev to avoid writing to prod.
       // Replace with your dev KV namespace ID.
-      "preview_id": "ca8f1e42390e42bba974529aa399fea7"
+      //"preview_id": "ca8f1e42390e42bba974529aa399fea7"
     }
   ],
 
