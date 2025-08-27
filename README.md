@@ -209,6 +209,10 @@ This repo uses Node’s built-in `node:test` for a few focused unit tests around
 
 If you prefer Vitest, you can add it later; place tests beside code as `*.test.ts`.
 
+## Release Notes
+
+- See `release-notes/` for version-specific notes (e.g., v1.1, v1.2).
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE.md).
