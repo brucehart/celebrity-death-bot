@@ -95,7 +95,7 @@ export function buildTelegramMessage({ name, age, description, cause, wiki_path,
   if (safeAge) parts.push(` (${safeAge})`);
   if (safeDesc) parts.push(` : ${safeDesc}`);
   if (safeCause) parts.push(` - ${safeCause}`);
-  parts.push('💀🚨');
+  parts.push(' 💀🚨');
 
   const msg = parts.join('');
   return truncateTelegramHTML(msg, MAX_TELEGRAM_LEN);
