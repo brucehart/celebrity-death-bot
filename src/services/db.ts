@@ -40,16 +40,12 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
   for (let i = 0; i < tuples.length; i += CHUNK) {
     const chunk = tuples.slice(i, i + CHUNK);
     // Use unnamed placeholders to avoid exceeding the ?1..?100 numeric cap
-    // and rely on bind order. 6 placeholders per tuple.
-    const placeholders = chunk.map(() => `(?,?,?,?,?,?)`).join(',');
+    // and rely on bind order. 6 placeholders per tuple; we add a literal 'pending'.
+    const placeholders = chunk.map(() => `(?,?,?,?,?,?,'pending')`).join(',');
 
-    const sql = `
-      INSERT INTO deaths (name, wiki_path, link_type, age, description, cause, llm_result)
-      SELECT v.name, v.wiki_path, v.link_type, v.age, v.description, v.cause, 'pending'
-      FROM (VALUES ${placeholders}) AS v(name, wiki_path, link_type, age, description, cause)
-      ON CONFLICT(wiki_path) DO NOTHING
-      RETURNING name, wiki_path, link_type, age, description, cause
-    `;
+    const sql = `INSERT OR IGNORE INTO deaths (name, wiki_path, link_type, age, description, cause, llm_result)
+                 VALUES ${placeholders}
+                 RETURNING name, wiki_path, link_type, age, description, cause`;
 
     const flatBinds = chunk.flat();
     statements.push(env.DB.prepare(sql).bind(...flatBinds));
