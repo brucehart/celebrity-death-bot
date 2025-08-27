@@ -17,7 +17,8 @@ const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
   .on('POST', '/telegram/webhook', (req, env) => telegramWebhook(req, env))
   .on('POST', '/run', (req, env) => manualRun(req, env))
-  .on('GET', '/', (_req, env) => env.ASSETS.fetch(new Request('index.html')))
+  // Serve homepage via Workers Assets. Pass the original request for headers/method consistency.
+  .on('GET', '/', (req, env) => env.ASSETS.fetch(new Request('index.html', req)))
   .on('GET', '/api/posts', (req, env) => getRecentPosts(req, env))
   .on('GET', '/api/meta', (_req, env) => getMeta(env))
   .on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
@@ -47,7 +48,7 @@ export default {
     }
     // Route first
     const res = await router.handle(request, env, ctx);
-    // Fallback to static assets (images, CSS, etc.) when route not found
+    // Fallback to static assets (images, CSS, etc.) only when no route matched
     if (res.status === 404) {
       const asset = await env.ASSETS.fetch(request);
       return asset;

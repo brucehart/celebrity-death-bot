@@ -3,6 +3,7 @@ import { buildTelegramMessage } from '../services/telegram.ts';
 
 const PAGE_SIZE = 25;
 
+// Encode cursor for URLs using UTF-8 safe b64 (encodeURIComponent/unescape pattern works in Workers)
 function b64(s: string): string {
   return btoa(unescape(encodeURIComponent(s)));
 }

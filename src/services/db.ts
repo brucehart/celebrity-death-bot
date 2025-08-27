@@ -1,17 +1,5 @@
 import type { Env, DeathEntry } from '../types.ts';
 
-export async function insertIfNew(env: Env, e: DeathEntry): Promise<boolean> {
-  const exists = await env.DB.prepare(`SELECT 1 FROM deaths WHERE wiki_path = ? LIMIT 1`).bind(e.wiki_path).first<{ 1: number }>();
-  if (exists) return false;
-  await env.DB.prepare(
-    `INSERT INTO deaths (name, wiki_path, link_type, age, description, cause, llm_result)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending')`
-  )
-    .bind(e.name, e.wiki_path, e.link_type, e.age, e.description, e.cause)
-    .run();
-  return true;
-}
-
 /**
  * Batched upsert that inserts only unseen wiki_paths and returns exactly those new rows.
  * Uses a single round-trip per chunk with RETURNING. Wraps all chunks in a transaction.

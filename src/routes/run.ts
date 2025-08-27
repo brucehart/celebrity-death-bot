@@ -17,12 +17,13 @@ export async function manualRun(request: Request, env: Env): Promise<Response> {
       },
     });
   }
-  const auth = request.headers.get('authorization') || request.headers.get('Authorization');
+  // Authorization header is case-insensitive; fetch once and parse optional Bearer prefix
+  const auth = request.headers.get('Authorization') || '';
   const token = (() => {
-    if (!auth) return '';
-    const maybeBearer = auth.trim();
-    const m = /^Bearer\s+(.+)$/i.exec(maybeBearer);
-    return m ? m[1].trim() : maybeBearer;
+    const maybe = auth.trim();
+    if (!maybe) return '';
+    const m = /^Bearer\s+(.+)$/i.exec(maybe);
+    return m ? m[1].trim() : maybe;
   })();
   if (!token || token !== env.MANUAL_RUN_SECRET) {
     return new Response('Unauthorized', { status: 401 });
