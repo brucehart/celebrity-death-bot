@@ -75,7 +75,7 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     notified++;
 
     if (wiki_path) {
-      await updateDeathLLM(env, wiki_path, cause);
+      await updateDeathLLM(env, wiki_path, cause, desc);
     }
   }
 

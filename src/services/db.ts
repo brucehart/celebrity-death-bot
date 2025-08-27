@@ -64,15 +64,20 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
   return newOnes;
 }
 
-export async function updateDeathLLM(env: Env, wiki_path: string, cause: string | null) {
+export async function updateDeathLLM(env: Env, wiki_path: string, cause: string | null, description?: string | null) {
+  const desc = (() => {
+    const d = (description ?? '').toString().trim();
+    return d ? d : null; // only update when non-empty
+  })();
   await env.DB.prepare(
     `UPDATE deaths
-       SET cause = ?,
+       SET cause = ?1,
+           description = COALESCE(?2, description),
            llm_date_time = CURRENT_TIMESTAMP,
            llm_result = 'yes'
-     WHERE wiki_path = ?`
+     WHERE wiki_path = ?3`
   )
-    .bind(cause, wiki_path)
+    .bind(cause, desc, wiki_path)
     .run();
 }
 
