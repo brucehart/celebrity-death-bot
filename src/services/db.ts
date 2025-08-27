@@ -29,17 +29,19 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
     r.cause ?? null,
   ] as const);
 
-  // 6 params per row -> SQLite has a 999 parameter limit. 166*6=996
-  const CHUNK = 166;
+  // D1 limits positional parameters to ?1..?100. We avoid numbered placeholders
+  // and cap total placeholders per statement to <= 100. Each row has 6 params,
+  // so 16 rows -> 96 placeholders stays within the limit.
+  const CHUNK = 16;
   const newOnes: DeathEntry[] = [];
 
   // Use D1's batch API which runs statements in a transaction.
   const statements: D1PreparedStatement[] = [];
   for (let i = 0; i < tuples.length; i += CHUNK) {
     const chunk = tuples.slice(i, i + CHUNK);
-    const placeholders = chunk
-      .map((_, j) => `(?${j * 6 + 1},?${j * 6 + 2},?${j * 6 + 3},?${j * 6 + 4},?${j * 6 + 5},?${j * 6 + 6})`)
-      .join(',');
+    // Use unnamed placeholders to avoid exceeding the ?1..?100 numeric cap
+    // and rely on bind order. 6 placeholders per tuple.
+    const placeholders = chunk.map(() => `(?,?,?,?,?,?)`).join(',');
 
     const sql = `
       INSERT INTO deaths (name, wiki_path, link_type, age, description, cause, llm_result)
@@ -84,18 +86,33 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
 export async function setLLMNoFor(env: Env, wikiPaths: string[]) {
   const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
   if (!paths.length) return;
-  const placeholders = paths.map((_, i) => `?${i + 1}`).join(',');
-  await env.DB.prepare(`UPDATE deaths SET llm_result = 'no' WHERE wiki_path IN (${placeholders}) AND llm_result = 'pending'`).bind(...paths).run();
+  const CHUNK = 100; // D1 param limit
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < paths.length; i += CHUNK) {
+    const chunk = paths.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => `?`).join(',');
+    statements.push(
+      env.DB.prepare(`UPDATE deaths SET llm_result = 'no' WHERE wiki_path IN (${placeholders}) AND llm_result = 'pending'`).bind(...chunk)
+    );
+  }
+  if (statements.length) await env.DB.batch(statements);
 }
 
 export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Record<string, 'active' | 'edit'>> {
   const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
   if (!paths.length) return {};
-  const placeholders = paths.map((_, i) => `?${i + 1}`).join(',');
-  const res = await env.DB.prepare(`SELECT wiki_path, link_type FROM deaths WHERE wiki_path IN (${placeholders})`).bind(...paths).all<{ wiki_path: string; link_type: 'active' | 'edit' }>();
+  const CHUNK = 100; // D1 param limit
   const out: Record<string, 'active' | 'edit'> = {};
-  for (const r of res.results || []) {
-    out[(r as any).wiki_path] = (r as any).link_type as 'active' | 'edit';
+  for (let i = 0; i < paths.length; i += CHUNK) {
+    const chunk = paths.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => `?`).join(',');
+    const res = await env.DB
+      .prepare(`SELECT wiki_path, link_type FROM deaths WHERE wiki_path IN (${placeholders})`)
+      .bind(...chunk)
+      .all<{ wiki_path: string; link_type: 'active' | 'edit' }>();
+    for (const r of res.results || []) {
+      out[(r as any).wiki_path] = (r as any).link_type as 'active' | 'edit';
+    }
   }
   return out;
 }
