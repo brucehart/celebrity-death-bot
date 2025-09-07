@@ -5,6 +5,8 @@ export interface Env {
   REPLICATE_API_TOKEN: string;
   TELEGRAM_BOT_TOKEN: string;
   BASE_URL: string;
+  // Optional: number of days into the month we also check the previous month
+  LOOKBACK_DAYS?: string;
   REPLICATE_WEBHOOK_SECRET?: string;
   MANUAL_RUN_SECRET: string;
   TELEGRAM_WEBHOOK_SECRET?: string;

@@ -16,6 +16,11 @@ export async function runJob(env: Env) {
   const year = toNYYear();
 
   // Determine target months in America/New_York tz
+  // Allow configurable lookback window (in days) for including the previous month
+  const rawLookback = env.LOOKBACK_DAYS;
+  const parsedLookback = rawLookback !== undefined ? Number(rawLookback) : NaN;
+  const lookbackDays = Number.isFinite(parsedLookback) && parsedLookback > 0 ? Math.floor(parsedLookback) : 5;
+
   const monthNY = Number(
     new Date().toLocaleString('en-US', {
       timeZone: cfg.tz,
@@ -29,7 +34,7 @@ export async function runJob(env: Env) {
     })
   );
   const targets: YearMonth[] = [{ year, month: monthNY }];
-  if (!Number.isNaN(dayNY) && dayNY <= 5) {
+  if (!Number.isNaN(dayNY) && dayNY <= lookbackDays) {
     const prevMonth = monthNY === 1 ? 12 : monthNY - 1;
     const prevYear = monthNY === 1 ? year - 1 : year;
     targets.push({ year: prevYear, month: prevMonth });
