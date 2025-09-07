@@ -5,6 +5,7 @@ import { buildReplicatePrompt, callReplicate } from './replicate.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUnique, uniqueSorted, tryAcquireMonthLock, releaseMonthLock } from './kv-monthly.ts';
+import { selectDeathsByIds, selectDeathsByWikiPaths } from './db.ts';
 
 // Orchestrates a single scan-and-notify run:
 // 1) Fetch the current (and early-month previous) Wikipedia "Deaths in <Month> <Year>" pages.
@@ -116,4 +117,25 @@ export async function runJob(env: Env) {
   }
 
   return { scanned: totalParsed, inserted: insertedRows.length };
+}
+
+// Re-enqueue specific existing rows (by D1 ids) for LLM filtering & summary.
+// This builds a prompt only for the requested rows and calls Replicate. The
+// standard /replicate/callback will process results and send notifications.
+export async function runJobForIds(env: Env, ids: number[]) {
+  const rows = await selectDeathsByIds(env, ids);
+  if (!rows.length) return { queued: 0, message: 'No matching ids' } as const;
+  const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
+  const prompt = buildReplicatePrompt(rows, forcedPaths);
+  await callReplicate(env, prompt, { forcedPaths });
+  return { queued: rows.length } as const;
+}
+
+export async function runJobForWikiPaths(env: Env, wikiPaths: string[]) {
+  const rows = await selectDeathsByWikiPaths(env, wikiPaths);
+  if (!rows.length) return { queued: 0, message: 'No matching wiki_paths' } as const;
+  const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
+  const prompt = buildReplicatePrompt(rows, forcedPaths);
+  await callReplicate(env, prompt, { forcedPaths });
+  return { queued: rows.length } as const;
 }

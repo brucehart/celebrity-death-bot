@@ -2,7 +2,7 @@ import type { Env, DeathEntry } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 
-export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
+export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?: string[]): string {
   const lines = newEntries.map((e) => {
     const parts = [
       e.name,
@@ -15,6 +15,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
     );
     return parts.filter(Boolean).join(', ');
   });
+  const forceNote = (forcedWikiPaths || []).map((s) => s.trim()).filter(Boolean);
   return [
     'You are a filter for notable deaths for a U.S. audience. Input is a list of people with `name`, `age`, `description`, `cause of death`, and `wiki_path`.',
     '',
@@ -27,6 +28,15 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
     '* High-profile business leaders, artists, peformers, scientists, technologists, politicians, or notorious criminals.',
     '',
     'Exclude obscure or regional figures. Prefer U.S. relevance; lower weight if fame is outside U.S.',
+    '',
+    ...(forceNote.length
+      ? [
+          '',
+          '**Important override:** The following `wiki_path` IDs MUST be included in the output regardless of typical notability criteria. If they appear in the input, include them with a concise description and cause of death: ',
+          '',
+          forceNote.join(', '),
+        ]
+      : []),
     '',
     '**Output format:** JSON array of objects with fields:',
     '',
@@ -46,7 +56,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
   ].join('\n');
 }
 
-export async function callReplicate(env: Env, prompt: string) {
+export async function callReplicate(env: Env, prompt: string, opts?: { forcedPaths?: string[] }) {
   const cfg = getConfig(env);
   const body: any = {
     stream: false,
@@ -74,6 +84,13 @@ export async function callReplicate(env: Env, prompt: string) {
         .filter(Boolean);
       (body as any).metadata = { candidates };
     }
+  }
+  // Include forced list in metadata so the callback can avoid marking them as 'no'
+  if (opts?.forcedPaths && opts.forcedPaths.length) {
+    (body as any).metadata = {
+      ...(body as any).metadata,
+      forcedPaths: opts.forcedPaths.map((s) => String(s || '').trim()).filter(Boolean),
+    };
   }
 
   const res = await fetchWithRetry('https://api.replicate.com/v1/models/openai/gpt-5-mini/predictions', {
