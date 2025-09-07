@@ -58,12 +58,38 @@ npm run deploy
     ```
     Authorization: Bearer <MANUAL_RUN_SECRET>
     ```
-  - **Example (curl):**
+  - **Full run (curl):**
     ```bash
     curl -X POST \
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
       https://<your-worker>/run
     ```
+  - **Targeted reprocess by IDs:** Re-enqueue specific `deaths.id` rows for Replicate summarization and normal processing (Telegram/X via the existing callback). These IDs are explicitly flagged in the prompt as MUST INCLUDE so the model accepts them as notable.
+    ```bash
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"ids":[123,124,130]}' \
+      https://<your-worker>/run
+    ```
+    Notes: The worker also avoids marking these IDs as `llm_result = 'no'` if the model unexpectedly omits them; they'll remain pending so you can retry.
+  - **Targeted reprocess by wiki_path(s):** If you prefer specifying the Wikipedia ID(s) instead of database IDs, send `wiki_paths` or a single `wiki_path`. Accepts raw IDs like `Jane_Doe`, full article paths like `/wiki/Jane_Doe`, or edit/redlink URLs like `/w/index.php?title=Jane_Doe&action=edit&redlink=1`.
+    ```bash
+    # Single
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"wiki_path":"Jane_Doe"}' \
+      https://<your-worker>/run
+
+    # Multiple
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"wiki_paths":["Jane_Doe","/wiki/John_Smith","/w/index.php?title=Greg_O%2727Connell&action=edit&redlink=1"]}' \
+      https://<your-worker>/run
+    ```
+    Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the Replicate prompt and won’t be auto-marked `no` if omitted.
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
 - `GET /health` – Simple health check returning `ok`.

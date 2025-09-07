@@ -47,10 +47,17 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 
   const items: Array<Record<string, unknown>> = normalizeToArray(parsed);
   if (!items.length) {
-    // If we can detect candidates, mark them as 'no'
+    // If we can detect candidates, mark them as 'no' except any that were forced.
     const metaCandidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
+    const forcedPaths: string[] = Array.isArray(payload?.metadata?.forcedPaths)
+      ? (payload.metadata.forcedPaths as any[]).map(String)
+      : Array.isArray(payload?.metadata?.forced)
+      ? (payload.metadata.forced as any[]).map(String)
+      : [];
     if (metaCandidates.length) {
-      await setLLMNoFor(env, metaCandidates);
+      const forcedSet = new Set(forcedPaths);
+      const toNo = metaCandidates.filter((c) => !forcedSet.has(String(c)));
+      if (toNo.length) await setLLMNoFor(env, toNo);
     }
     return Response.json({ ok: true, notified: 0 });
   }
@@ -82,7 +89,13 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
   // Mark any candidates not selected as 'no' for this callback only
   const candidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
   if (candidates.length) {
-    const notSelected = candidates.filter((c: string) => !selectedPaths.includes(c));
+    const forcedPaths: string[] = Array.isArray(payload?.metadata?.forcedPaths)
+      ? (payload.metadata.forcedPaths as any[]).map(String)
+      : Array.isArray(payload?.metadata?.forced)
+      ? (payload.metadata.forced as any[]).map(String)
+      : [];
+    const forcedSet = new Set(forcedPaths.map(String));
+    const notSelected = candidates.filter((c: string) => !selectedPaths.includes(c) && !forcedSet.has(String(c)));
     if (notSelected.length) await setLLMNoFor(env, notSelected);
   }
   return Response.json({ ok: true, notified });

@@ -133,3 +133,100 @@ export async function subscribeTelegram(env: Env, chatId: string) {
 export async function unsubscribeTelegram(env: Env, chatId: string) {
   await env.DB.prepare(`DELETE FROM subscribers WHERE type = 'telegram' AND chat_id = ?`).bind(chatId).run();
 }
+
+// Fetch a list of DeathEntry rows by numeric IDs. Returns only the fields
+// needed by downstream Replicate prompt building and notifications.
+export async function selectDeathsByIds(env: Env, ids: number[]): Promise<DeathEntry[]> {
+  const cleaned = (ids || [])
+    .map((n) => (typeof n === 'string' ? Number(n) : n))
+    .filter((n) => Number.isFinite(n))
+    .map((n) => Math.floor(Number(n)));
+  if (!cleaned.length) return [];
+
+  const CHUNK = 100; // D1 parameter limit safeguard
+  const out: DeathEntry[] = [];
+  for (let i = 0; i < cleaned.length; i += CHUNK) {
+    const chunk = cleaned.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => `?`).join(',');
+    const res = await env.DB
+      .prepare(
+        `SELECT name, wiki_path, link_type, age, description, cause
+           FROM deaths
+          WHERE id IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .all<DeathEntry>();
+    if (res.results) out.push(...(res.results as any));
+  }
+  return out;
+}
+
+function extractWikiId(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  // Common patterns:
+  // - "Foo_Bar" (already an ID)
+  // - "/wiki/Foo_Bar" or "https://en.wikipedia.org/wiki/Foo_Bar"
+  // - "/w/index.php?title=Foo_Bar&action=edit&redlink=1"
+  const wikiMatch = /\/wiki\/([^?#]+)/.exec(s);
+  if (wikiMatch) return wikiMatch[1];
+  const titleMatch = /[?&]title=([^&#]+)/.exec(s);
+  if (titleMatch) return titleMatch[1];
+  return s;
+}
+
+function candidateIdsFrom(raw: string): string[] {
+  const id = extractWikiId(raw);
+  if (!id) return [];
+  const out = new Set<string>();
+  const base = id.replace(/\s+/g, '_');
+  out.add(base);
+  // If percent-encoded characters exist, include a decoded variant
+  try {
+    if (/%[0-9A-Fa-f]{2}/.test(base)) {
+      out.add(decodeURIComponent(base));
+    }
+  } catch {}
+  // If the string contains common unencoded chars like apostrophes, include a minimally encoded variant
+  if (base.includes("'")) {
+    out.add(base.replace(/'/g, '%27'));
+  }
+  return Array.from(out);
+}
+
+// Fetch a list of DeathEntry rows by wiki_path IDs or URLs. Accepts values like
+// "Foo_Bar", "/wiki/Foo_Bar", or "/w/index.php?title=Foo_Bar&...". Handles minor
+// encoding differences by querying a small candidate set per input.
+export async function selectDeathsByWikiPaths(env: Env, wikiPaths: string[]): Promise<DeathEntry[]> {
+  const inputs = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!inputs.length) return [];
+  const candidates = new Set<string>();
+  for (const raw of inputs) {
+    for (const c of candidateIdsFrom(raw)) candidates.add(c);
+  }
+  const list = Array.from(candidates);
+  if (!list.length) return [];
+
+  const CHUNK = 100;
+  const out: DeathEntry[] = [];
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const chunk = list.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => `?`).join(',');
+    const res = await env.DB
+      .prepare(
+        `SELECT name, wiki_path, link_type, age, description, cause
+           FROM deaths
+          WHERE wiki_path IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .all<DeathEntry>();
+    if (res.results) out.push(...(res.results as any));
+  }
+  // Deduplicate by wiki_path in case multiple candidates mapped to the same row
+  const map = new Map<string, DeathEntry>();
+  for (const r of out) {
+    const key = String((r as any).wiki_path || '').trim();
+    if (!map.has(key)) map.set(key, r);
+  }
+  return Array.from(map.values());
+}
