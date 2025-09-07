@@ -18,11 +18,11 @@ export function buildReplicatePrompt(newEntries: DeathEntry[]): string {
   return [
     'You are a filter for notable deaths for a U.S. audience. Input is a list of people with `name`, `age`, `description`, `cause of death`, and `wiki_path`.',
     '',
-    '**Task:** Return only JSON. Include people if they are:',
+    '**Task:** Return only JSON. Include people if they are: ',
     '',
     '* Major U.S. pro or college athletes (NFL, NBA, MLB, NHL, WWE, PGA, NCAA, FIFA), Olympic medalists or notable Olympic athletes, or global stars with strong U.S. coverage.',
     '',
-    '* Widely known in film, TV, pop music, entertainment, media or commercials.',
+    '* Widely known in film, TV, pop music, Internet media including YouTube, entertainment, media or commercials.',
     '',
     '* High-profile business leaders, artists, peformers, scientists, technologists, politicians, or notorious criminals.',
     '',
