@@ -38,7 +38,9 @@
   "vars": {    
     "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev",
     "X_PROFILE_URL": "https://x.com/CelebDeathBot",
-    "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot"
+    "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot",
+    // Include previous month when current NY day is <= LOOKBACK_DAYS
+    "LOOKBACK_DAYS": "5"
   },
 
   // Optional but nice for debugging in the dashboard
