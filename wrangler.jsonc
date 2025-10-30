@@ -9,7 +9,7 @@
   "compatibility_date": "2025-08-13",
 
   // Run hourly at minute 5 (adjust as needed)
-  "triggers": { "crons": ["5 * * * *"] },
+  "triggers": { "crons": ["5-59/15 * * * *"] },
 
   // D1 binding
   "d1_databases": [
