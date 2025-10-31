@@ -26,9 +26,24 @@ type QueryState = {
 	llmTo: string;
 };
 
+type HighlightConfig = { pattern: string };
+
 const PAGE_SIZES = [25, 50, 100] as const;
 const LLM_RESULT_OPTIONS = ['pending', 'yes', 'no', 'skipped', 'error'];
 const LINK_TYPE_OPTIONS: Array<'active' | 'edit'> = ['active', 'edit'];
+const EASTERN_TZ = 'America/New_York';
+
+const headerDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+	timeZone: EASTERN_TZ,
+	dateStyle: 'long',
+	timeStyle: 'short',
+});
+
+const detailDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+	timeZone: EASTERN_TZ,
+	dateStyle: 'medium',
+	timeStyle: 'medium',
+});
 
 export async function llmDebug(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
@@ -44,7 +59,8 @@ export async function llmDebug(request: Request, env: Env): Promise<Response> {
 	const hasPrev = state.page > 1;
 
 	const groups = groupRows(pageRows);
-	const html = renderPage(groups, state, { hasNext, hasPrev });
+	const highlight = buildHighlightConfig(state.search);
+	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight);
 
 	return new Response(html, {
 		headers: {
@@ -128,14 +144,13 @@ function buildQuery(state: QueryState): { sql: string; binds: Array<string | num
 		binds.push(llmToSql);
 	}
 
-	// Only fetch what we need: requested page size plus one extra row to know if there is another page.
 	const limit = state.pageSize + 1;
 	const offset = (state.page - 1) * state.pageSize;
 
 	const sql = `SELECT id, name, wiki_path, link_type, age, description, cause, llm_result, llm_date_time, created_at
 		FROM deaths
 		${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-		ORDER BY COALESCE(llm_date_time, '') DESC, id DESC
+		ORDER BY created_at DESC, id DESC
 		LIMIT ? OFFSET ?`;
 
 	return { sql, binds: [...binds, limit, offset] };
@@ -158,10 +173,41 @@ function escapeLike(value: string): string {
 	return value.replace(/[%_\\]/g, (c) => `\\${c}`);
 }
 
+function buildHighlightConfig(search: string): HighlightConfig | null {
+	const trimmed = search.trim();
+	if (!trimmed) return null;
+	const tokens = Array.from(new Set(trimmed.split(/\s+/).filter(Boolean)));
+	if (!tokens.length) return null;
+	const pattern = tokens.map(escapeRegex).join('|');
+	if (!pattern) return null;
+	return { pattern };
+}
+
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightText(value: string | number | null, config: HighlightConfig | null, fallback = '—'): string {
+	const str = toStr(value);
+	if (!str) return fallback;
+	if (!config) return escapeHtml(str);
+	const regex = new RegExp(config.pattern, 'gi');
+	let result = '';
+	let lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(str)) !== null) {
+		result += escapeHtml(str.slice(lastIndex, match.index));
+		result += `<mark>${escapeHtml(match[0])}</mark>`;
+		lastIndex = regex.lastIndex;
+	}
+	result += escapeHtml(str.slice(lastIndex));
+	return result;
+}
+
 function groupRows(rows: LlmRow[]): Array<{ key: string | null; label: string; rows: LlmRow[] }> {
 	const groups: Array<{ key: string | null; label: string; rows: LlmRow[] }> = [];
 	for (const row of rows) {
-		const key = row.llm_date_time || null;
+		const key = row.created_at || null;
 		const last = groups[groups.length - 1];
 		if (last && last.key === key) {
 			last.rows.push(row);
@@ -173,33 +219,20 @@ function groupRows(rows: LlmRow[]): Array<{ key: string | null; label: string; r
 }
 
 function formatGroupHeader(value: string | null): string {
-	if (!value) return 'Pending LLM evaluation';
+	if (!value) return 'Created timestamp unavailable';
+	const formatted = formatWithFormatter(value, headerDateTimeFormatter);
+	return `Created ${formatted}`;
+}
+
+function formatFullDateTime(value: string | null, fallback = '—'): string {
+	if (!value) return fallback;
+	return formatWithFormatter(value, detailDateTimeFormatter);
+}
+
+function formatWithFormatter(value: string, formatter: Intl.DateTimeFormat): string {
 	const date = parseUtcDate(value);
 	if (!date) return value;
-	return `${formatDate(date, { month: 'long', day: 'numeric', year: 'numeric' })} • ${formatTime(date, true)} UTC`;
-}
-
-function formatDate(date: Date, opts: { month: 'long' | 'short'; day: 'numeric'; year: 'numeric' }): string {
-	const monthNames =
-		opts.month === 'long'
-			? ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-			: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-	return `${monthNames[date.getUTCMonth()]} ${String(date.getUTCDate()).padStart(2, '0')}, ${date.getUTCFullYear()}`;
-}
-
-function formatTime(date: Date, includeSeconds = false): string {
-	const hours = String(date.getUTCHours()).padStart(2, '0');
-	const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-	if (!includeSeconds) return `${hours}:${minutes}`;
-	const seconds = String(date.getUTCSeconds()).padStart(2, '0');
-	return `${hours}:${minutes}:${seconds}`;
-}
-
-function formatFullDateTime(value: string | null): string {
-	if (!value) return '—';
-	const date = parseUtcDate(value);
-	if (!date) return value;
-	return `${formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' })} ${formatTime(date, true)} UTC`;
+	return `${formatter.format(date)} ET`;
 }
 
 function parseUtcDate(value: string): Date | null {
@@ -211,6 +244,11 @@ function parseUtcDate(value: string): Date | null {
 	} catch {
 		return null;
 	}
+}
+
+function sanitizeToken(value: string): string {
+	const clean = value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+	return clean || 'pending';
 }
 
 function escapeHtml(value: string | null | number): string {
@@ -233,7 +271,12 @@ function escapeHtml(value: string | null | number): string {
 	});
 }
 
-function renderPage(groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>, state: QueryState, pageMeta: { hasNext: boolean; hasPrev: boolean }) {
+function renderPage(
+	groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>,
+	state: QueryState,
+	pageMeta: { hasNext: boolean; hasPrev: boolean },
+	highlight: HighlightConfig | null
+) {
 	const baseParams = new URLSearchParams();
 	if (state.search) baseParams.set('search', state.search);
 	if (state.pageSize !== PAGE_SIZES[0]) baseParams.set('pageSize', String(state.pageSize));
@@ -267,7 +310,7 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 			--text: #0b1220;
 			--muted: #6b7690;
 			--accent: #2457f5;
-			--accent-soft: rgba(36, 87, 245, 0.1);
+			--accent-soft: rgba(36, 87, 245, 0.18);
 			--success: #1f9d67;
 			--danger: #d6455d;
 			--warning: #c37b16;
@@ -277,9 +320,12 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 		a { color: var(--accent); text-decoration: none; }
 		a:hover { text-decoration: underline; }
 		header { padding: 24px 32px; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); position: sticky; top: 0; background: rgba(245,247,251,0.92); z-index: 10; }
-		.container { max-width: 1240px; margin: 0 auto; padding: 24px 32px 60px; }
+		.header-inner { display: flex; align-items: center; gap: 18px; }
+		.brand-logo { width: 64px; height: 64px; border-radius: 50%; border: 1px solid var(--border); box-shadow: 0 8px 25px rgba(15, 22, 42, 0.14); object-fit: cover; background: #fff; }
+		.header-copy { display: flex; flex-direction: column; gap: 6px; }
 		h1 { margin: 0; font-size: 1.9rem; font-weight: 700; }
-		.subtitle { color: var(--muted); margin-top: 4px; }
+		.subtitle { color: var(--muted); margin: 0; font-size: 0.98rem; }
+		.container { max-width: 1240px; margin: 0 auto; padding: 24px 32px 60px; }
 		form.filters { margin-top: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 20px 24px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); box-shadow: 0 18px 45px rgba(15, 22, 42, 0.08); }
 		.form-group { display: flex; flex-direction: column; gap: 8px; }
 		label { font-weight: 600; font-size: 0.92rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
@@ -296,11 +342,11 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 		.summary .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); font-size: 0.85rem; color: var(--muted); }
 		.groups { display: flex; flex-direction: column; gap: 18px; margin-top: 16px; }
 		.group { background: var(--panel); border-radius: 18px; border: 1px solid var(--border); box-shadow: 0 18px 45px rgba(15, 22, 42, 0.08); }
-		.group-header { padding: 18px 24px; border-bottom: 1px solid var(--border); background: linear-gradient(135deg, rgba(36, 87, 245, 0.08), rgba(87, 143, 255, 0.08)); font-weight: 600; font-size: 1rem; }
+		.group-header { padding: 18px 24px; border-bottom: 1px solid var(--border); background: linear-gradient(135deg, rgba(36, 87, 245, 0.08), rgba(87, 143, 255, 0.08)); font-weight: 600; font-size: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 		.group-items { display: flex; flex-direction: column; gap: 12px; padding: 18px 24px 24px; }
 		.result-card { padding: 16px 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel-alt); display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 		.result-main { display: flex; flex-direction: column; gap: 6px; }
-		.result-main h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 10px; }
+		.result-main h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 		.result-main h3 a { font-weight: 700; color: var(--text); }
 		.result-main h3 span.name-disabled { font-weight: 700; color: var(--muted); }
 		.badge-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
@@ -315,6 +361,7 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 		.pagination a { padding: 10px 18px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); font-weight: 600; color: var(--text); }
 		.pagination a[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
 		.empty { padding: 60px 24px; text-align: center; color: var(--muted); background: var(--panel); border-radius: 18px; border: 1px dashed var(--border); }
+		mark { background: var(--accent-soft); color: var(--text); padding: 0 4px; border-radius: 4px; font-weight: 600; }
 		@media (max-width: 720px) {
 			header, .container { padding: 18px 16px; }
 			form.filters { grid-template-columns: 1fr; }
@@ -324,8 +371,13 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 </head>
 <body>
 	<header>
-		<h1>LLM Evaluation Debug</h1>
-		<p class="subtitle">Inspect Replicate results for parsed Wikipedia entries, grouped by evaluation timestamp.</p>
+		<div class="header-inner">
+			<img class="brand-logo" src="/Celebrity-Death-Bot.png" alt="Celebrity Death Bot logo" />
+			<div class="header-copy">
+				<h1>LLM Evaluation Debug</h1>
+				<p class="subtitle">Inspect Replicate outputs grouped by record creation time, with filters for deeper investigation.</p>
+			</div>
+		</div>
 	</header>
 	<main class="container">
 		<form class="filters" method="get">
@@ -365,15 +417,11 @@ function renderPage(groups: Array<{ key: string | null; label: string; rows: Llm
 		<section class="summary">
 			<div class="badge">Page ${state.page}</div>
 			<div class="badge">Showing ${groups.reduce((acc, g) => acc + g.rows.length, 0)} of ${state.pageSize} rows</div>
-			${
-				state.search
-					? `<div class="badge">Search: <strong>${escapeHtml(state.search)}</strong></div>`
-					: ''
-			}
+			${state.search ? `<div class="badge">Search: <strong>${escapeHtml(state.search)}</strong></div>` : ''}
 			${state.llmResults.length ? `<div class="badge">LLM: ${state.llmResults.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			${state.linkTypes.length ? `<div class="badge">Links: ${state.linkTypes.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 		</section>
-		${groups.length ? renderGroups(groups) : `<div class="empty">No results found for the selected filters.</div>`}
+		${groups.length ? renderGroups(groups, highlight) : `<div class="empty">No results found for the selected filters.</div>`}
 		<nav class="pagination">
 			${renderPagerLink('Newer', `/llm-debug?${prevParams.toString()}`, pageMeta.hasPrev)}
 			${renderPagerLink('Older', `/llm-debug?${nextParams.toString()}`, pageMeta.hasNext)}
@@ -400,14 +448,14 @@ function renderCheckboxGroup<T extends string>(name: string, labelText: string, 
 </div>`;
 }
 
-function renderGroups(groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>): string {
+function renderGroups(groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>, highlight: HighlightConfig | null): string {
 	return `<section class="groups">
 	${groups
 		.map(
 			(group) => `<article class="group">
 			<div class="group-header">${escapeHtml(group.label)}</div>
 			<div class="group-items">
-				${group.rows.map(renderRow).join('')}
+				${group.rows.map((row) => renderRow(row, highlight)).join('')}
 			</div>
 		</article>`
 		)
@@ -415,26 +463,38 @@ function renderGroups(groups: Array<{ key: string | null; label: string; rows: L
 </section>`;
 }
 
-function renderRow(row: LlmRow): string {
+function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
 	const isActive = row.link_type === 'active';
 	const url = isActive ? buildSafeUrl(row.wiki_path) : '';
-	const badgeClass = `badge-${escapeHtml((row.llm_result || 'pending').toLowerCase())}`;
+	const nameHtml = highlightText(row.name, highlight, '—');
+	const wikiHtml = highlightText(row.wiki_path, highlight, '—');
+	const ageHtml = row.age == null ? '—' : highlightText(row.age, highlight, '—');
+	const descriptionHtml = highlightText(row.description, highlight, '—');
+	const causeHtml = highlightText(row.cause, highlight, '—');
+	const llmLabel = toStr(row.llm_result || 'pending') || 'pending';
+	const badgeClass = `badge-${sanitizeToken(llmLabel)}`;
+	const llmTime = escapeHtml(formatFullDateTime(row.llm_date_time, 'Pending evaluation'));
+	const createdTime = escapeHtml(formatFullDateTime(row.created_at, '—'));
+	const nameBlock = isActive
+		? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${nameHtml}</a>`
+		: `<span class="name-disabled">${nameHtml}</span>`;
+
 	return `<div class="result-card">
 	<div class="result-main">
-		<h3>${isActive ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.name)}</a>` : `<span class="name-disabled">${escapeHtml(row.name)}</span>`}
-			<span class="badge-pill ${badgeClass}">${escapeHtml(row.llm_result || 'pending')}</span>
+		<h3>${nameBlock}
+			<span class="badge-pill ${badgeClass}">${escapeHtml(llmLabel)}</span>
 		</h3>
 		<div class="meta-grid">
-			<div><strong>Wiki Path:</strong> ${escapeHtml(row.wiki_path)}</div>
-			<div><strong>Age:</strong> ${row.age == null ? '—' : escapeHtml(String(row.age))}</div>
+			<div><strong>Wiki Path:</strong> ${wikiHtml}</div>
+			<div><strong>Age:</strong> ${ageHtml}</div>
 			<div><strong>Link Type:</strong> ${escapeHtml(row.link_type)}</div>
 		</div>
 	</div>
 	<div class="meta-grid">
-		<div><strong>Description:</strong> ${row.description ? escapeHtml(row.description) : '—'}</div>
-		<div><strong>Cause:</strong> ${row.cause ? escapeHtml(row.cause) : '—'}</div>
-		<div><strong>LLM Timestamp:</strong> ${escapeHtml(formatFullDateTime(row.llm_date_time))}</div>
-		<div><strong>Created:</strong> ${escapeHtml(formatFullDateTime(row.created_at))}</div>
+		<div><strong>Description:</strong> ${descriptionHtml}</div>
+		<div><strong>Cause:</strong> ${causeHtml}</div>
+		<div><strong>LLM Timestamp:</strong> ${llmTime}</div>
+		<div><strong>Created:</strong> ${createdTime}</div>
 	</div>
 </div>`;
 }
