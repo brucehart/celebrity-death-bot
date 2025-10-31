@@ -68,23 +68,25 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
 }
 
 export async function setLLMNoFor(env: Env, wikiPaths: string[]) {
-  const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
-  if (!paths.length) return;
-  const CHUNK = 100; // D1 param limit
-  const statements: D1PreparedStatement[] = [];
-  for (let i = 0; i < paths.length; i += CHUNK) {
-    const chunk = paths.slice(i, i + CHUNK);
-    const placeholders = chunk.map(() => `?`).join(',');
-    statements.push(
-      env.DB.prepare(
-        `UPDATE deaths
-           SET llm_result = 'no',
-               llm_date_time = CURRENT_TIMESTAMP
-         WHERE wiki_path IN (${placeholders}) AND llm_result = 'pending'`
-      ).bind(...chunk)
-    );
-  }
-  if (statements.length) await env.DB.batch(statements);
+	const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
+	if (!paths.length) return;
+
+	const unique = Array.from(new Set(paths));
+	const STATEMENT_BATCH_SIZE = 40; // small batch to stay well under D1 limits
+
+	for (let i = 0; i < unique.length; i += STATEMENT_BATCH_SIZE) {
+		const chunk = unique.slice(i, i + STATEMENT_BATCH_SIZE);
+		const statements = chunk.map((path) =>
+			env.DB.prepare(
+				`UPDATE deaths
+					   SET llm_result = 'no',
+						   llm_date_time = CURRENT_TIMESTAMP
+					 WHERE wiki_path = ?1
+					   AND llm_result = 'pending'`
+			).bind(path)
+		);
+		if (statements.length) await env.DB.batch(statements);
+	}
 }
 
 export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Record<string, 'active' | 'edit'>> {
