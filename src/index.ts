@@ -12,6 +12,7 @@ import { runJob } from './services/job.ts';
 import { xOauthStart, xOauthCallback, xOauthStatus } from './services/x.ts';
 import { getRecentPosts } from './routes/posts.ts';
 import { getMeta } from './routes/meta.ts';
+import { llmDebug } from './routes/llm-debug.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
@@ -21,6 +22,7 @@ const router = new Router()
   .on('GET', '/', (req, env) => env.ASSETS.fetch(new Request('index.html', req)))
   .on('GET', '/api/posts', (req, env) => getRecentPosts(req, env))
   .on('GET', '/api/meta', (_req, env) => getMeta(env))
+  .on('GET', '/llm-debug', (req, env) => llmDebug(req, env))
   .on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
   .on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(env, req.url, env.BASE_URL))
   .on('GET', '/x/oauth/status', (_req, env) => xOauthStatus(env))
