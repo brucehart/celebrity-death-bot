@@ -1,7 +1,7 @@
 import type { Env } from '../types.ts';
 import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/json.ts';
 import { toStr } from '../utils/strings.ts';
-import { getLinkTypeMap, setLLMNoFor, updateDeathLLM } from '../services/db.ts';
+import { getLinkTypeMap, markPendingDeathsAsNo, updateDeathLLM } from '../services/db.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
@@ -36,6 +36,7 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
   const rawOutput = payload?.output;
   const joined = coalesceOutput(rawOutput).trim();
   if (!joined) {
+    await markPendingDeathsAsNo(env);
     return Response.json({ ok: true, message: 'No output' });
   }
 
@@ -46,57 +47,33 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
   }
 
   const items: Array<Record<string, unknown>> = normalizeToArray(parsed);
-  if (!items.length) {
-    // If we can detect candidates, mark them as 'no' except any that were forced.
-    const metaCandidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
-    const forcedPaths: string[] = Array.isArray(payload?.metadata?.forcedPaths)
-      ? (payload.metadata.forcedPaths as any[]).map(String)
-      : Array.isArray(payload?.metadata?.forced)
-      ? (payload.metadata.forced as any[]).map(String)
-      : [];
-    if (metaCandidates.length) {
-      const forcedSet = new Set(forcedPaths);
-      const toNo = metaCandidates.filter((c) => !forcedSet.has(String(c)));
-      if (toNo.length) await setLLMNoFor(env, toNo);
-    }
-    return Response.json({ ok: true, notified: 0 });
-  }
 
   let notified = 0;
-  const selectedPaths: string[] = items.map((it) => toStr(it['wiki_path'])).filter(Boolean);
-  const linkTypeMap = await getLinkTypeMap(env, selectedPaths);
-  for (const it of items) {
-    const name = toStr(it['name']);
-    if (!name) continue;
-    const age = toStr(it['age']);
-    const desc = toStr(it['description']);
-    const cause = toStr(it['cause of death'] ?? it['cause_of_death'] ?? (it as any).causeOfDeath ?? it['cause']);
-    const wiki_path = toStr(it['wiki_path']);
-    const link_type = wiki_path ? (linkTypeMap[wiki_path] || 'active') : 'active';
+  if (items.length) {
+    const selectedPaths: string[] = items.map((it) => toStr(it['wiki_path'])).filter(Boolean);
+    const linkTypeMap = selectedPaths.length ? await getLinkTypeMap(env, selectedPaths) : {};
+    for (const it of items) {
+      const name = toStr(it['name']);
+      if (!name) continue;
+      const age = toStr(it['age']);
+      const desc = toStr(it['description']);
+      const cause = toStr(it['cause of death'] ?? it['cause_of_death'] ?? (it as any).causeOfDeath ?? it['cause']);
+      const wiki_path = toStr(it['wiki_path']);
+      const link_type = wiki_path ? (linkTypeMap[wiki_path] || 'active') : 'active';
 
-    const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path, link_type });
-    await notifyTelegram(env, msg);
-    // Post to X.com if credentials are configured; mirrors Telegram format
-    const xText = buildXStatus({ name, age, description: desc, cause, wiki_path, link_type });
-    await postToXIfConfigured(env, xText);
-    notified++;
+      const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path, link_type });
+      await notifyTelegram(env, msg);
+      // Post to X.com if credentials are configured; mirrors Telegram format
+      const xText = buildXStatus({ name, age, description: desc, cause, wiki_path, link_type });
+      await postToXIfConfigured(env, xText);
+      notified++;
 
-    if (wiki_path) {
-      await updateDeathLLM(env, wiki_path, cause, desc);
+      if (wiki_path) {
+        await updateDeathLLM(env, wiki_path, cause, desc);
+      }
     }
   }
 
-  // Mark any candidates not selected as 'no' for this callback only
-  const candidates: string[] = Array.isArray(payload?.metadata?.candidates) ? (payload.metadata.candidates as any[]).map(String) : [];
-  if (candidates.length) {
-    const forcedPaths: string[] = Array.isArray(payload?.metadata?.forcedPaths)
-      ? (payload.metadata.forcedPaths as any[]).map(String)
-      : Array.isArray(payload?.metadata?.forced)
-      ? (payload.metadata.forced as any[]).map(String)
-      : [];
-    const forcedSet = new Set(forcedPaths.map(String));
-    const notSelected = candidates.filter((c: string) => !selectedPaths.includes(c) && !forcedSet.has(String(c)));
-    if (notSelected.length) await setLLMNoFor(env, notSelected);
-  }
+  await markPendingDeathsAsNo(env);
   return Response.json({ ok: true, notified });
 }

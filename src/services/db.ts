@@ -51,10 +51,10 @@ export async function insertBatchReturningNew(env: Env, rows: DeathEntry[]): Pro
 }
 
 export async function updateDeathLLM(env: Env, wiki_path: string, cause: string | null, description?: string | null) {
-  const desc = (() => {
-    const d = (description ?? '').toString().trim();
-    return d ? d : null; // only update when non-empty
-  })();
+	const desc = (() => {
+		const d = (description ?? '').toString().trim();
+		return d ? d : null; // only update when non-empty
+	})();
   await env.DB.prepare(
     `UPDATE deaths
        SET cause = ?1,
@@ -67,31 +67,18 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
     .run();
 }
 
-export async function setLLMNoFor(env: Env, wikiPaths: string[]) {
-	const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
-	if (!paths.length) return;
-
-	const unique = Array.from(new Set(paths));
-	const STATEMENT_BATCH_SIZE = 40; // small batch to stay well under D1 limits
-
-	for (let i = 0; i < unique.length; i += STATEMENT_BATCH_SIZE) {
-		const chunk = unique.slice(i, i + STATEMENT_BATCH_SIZE);
-		const statements = chunk.map((path) =>
-			env.DB.prepare(
-				`UPDATE deaths
-					   SET llm_result = 'no',
-						   llm_date_time = CURRENT_TIMESTAMP
-					 WHERE wiki_path = ?1
-					   AND llm_result = 'pending'`
-			).bind(path)
-		);
-		if (statements.length) await env.DB.batch(statements);
-	}
+export async function markPendingDeathsAsNo(env: Env) {
+  await env.DB.prepare(
+    `UPDATE deaths
+       SET llm_result = 'no',
+           llm_date_time = CURRENT_TIMESTAMP
+     WHERE llm_result = 'pending'`
+  ).run();
 }
 
 export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Record<string, 'active' | 'edit'>> {
-  const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
-  if (!paths.length) return {};
+	const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
+	if (!paths.length) return {};
   const CHUNK = 100; // D1 param limit
   const out: Record<string, 'active' | 'edit'> = {};
   for (let i = 0; i < paths.length; i += CHUNK) {
