@@ -76,7 +76,12 @@ export async function setLLMNoFor(env: Env, wikiPaths: string[]) {
     const chunk = paths.slice(i, i + CHUNK);
     const placeholders = chunk.map(() => `?`).join(',');
     statements.push(
-      env.DB.prepare(`UPDATE deaths SET llm_result = 'no' WHERE wiki_path IN (${placeholders}) AND llm_result = 'pending'`).bind(...chunk)
+      env.DB.prepare(
+        `UPDATE deaths
+           SET llm_result = 'no',
+               llm_date_time = CURRENT_TIMESTAMP
+         WHERE wiki_path IN (${placeholders}) AND llm_result = 'pending'`
+      ).bind(...chunk)
     );
   }
   if (statements.length) await env.DB.batch(statements);
