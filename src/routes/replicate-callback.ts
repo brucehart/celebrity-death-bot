@@ -15,8 +15,17 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     return new Response('Invalid body', { status: 400 });
   }
 
+  const manualOverride = (() => {
+    const raw = request.headers.get('Authorization') || '';
+    const trimmed = raw.trim();
+    if (!trimmed || !env.MANUAL_RUN_SECRET) return false;
+    const bearer = /^Bearer\s+(.+)$/i.exec(trimmed);
+    const token = (bearer ? bearer[1] : trimmed).trim();
+    return token === env.MANUAL_RUN_SECRET;
+  })();
+
   // If configured, verify Replicate webhook HMAC signature and timestamp
-  if (env.REPLICATE_WEBHOOK_SECRET) {
+  if (env.REPLICATE_WEBHOOK_SECRET && !manualOverride) {
     const res = await verifyReplicateWebhook(request, env.REPLICATE_WEBHOOK_SECRET, bodyText);
     if (!res.ok) return new Response(res.error, { status: res.code });
   }

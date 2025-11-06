@@ -91,6 +91,7 @@ npm run deploy
     ```
     Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the Replicate prompt and won’t be auto-marked `no` if omitted.
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
+  - Manual override: send the same `Authorization: Bearer <MANUAL_RUN_SECRET>` header that `/run` uses to bypass the HMAC requirement. Useful when you need to craft a callback payload to force a “yes” decision.
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
 - `GET /health` – Simple health check returning `ok`.
 

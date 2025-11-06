@@ -127,7 +127,7 @@ export async function runJobForIds(env: Env, ids: number[]) {
   if (!rows.length) return { queued: 0, message: 'No matching ids' } as const;
   const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
   const prompt = buildReplicatePrompt(rows, forcedPaths);
-  await callReplicate(env, prompt, { forcedPaths });
+  await callReplicate(env, prompt);
   return { queued: rows.length } as const;
 }
 
@@ -136,6 +136,6 @@ export async function runJobForWikiPaths(env: Env, wikiPaths: string[]) {
   if (!rows.length) return { queued: 0, message: 'No matching wiki_paths' } as const;
   const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
   const prompt = buildReplicatePrompt(rows, forcedPaths);
-  await callReplicate(env, prompt, { forcedPaths });
+  await callReplicate(env, prompt);
   return { queued: rows.length } as const;
 }

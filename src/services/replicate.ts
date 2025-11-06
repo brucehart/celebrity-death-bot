@@ -56,8 +56,10 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
   ].join('\n');
 }
 
-export async function callReplicate(env: Env, prompt: string, opts?: { forcedPaths?: string[] }) {
+export async function callReplicate(env: Env, prompt: string) {
   const cfg = getConfig(env);
+  // NOTE: Some hosted models (e.g., OpenAI GPT-5 endpoints) reject unknown top-level fields such as
+  // `metadata`, so keep the payload limited to the officially supported fields.
   const body: any = {
     stream: false,
     input: {
@@ -71,27 +73,6 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
     webhook: `${cfg.baseUrl}/replicate/callback`,
     webhook_events_filter: ['completed'],
   };
-  // Attach minimal metadata to identify the batch candidates by wiki_path.
-  if ((prompt || '').includes('Input (each line:')) {
-    // Best-effort extraction of wiki_paths from prompt for metadata redundancy.
-    const m = /Input \(each line:[\s\S]*?----\n([\s\S]*?)\n----/m.exec(prompt);
-    if (m && m[1]) {
-      const candidates = m[1]
-        .split(/\n\n+/)
-        .map((line) => line.trim())
-        .map((line) => line.split(',').pop() || '')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      (body as any).metadata = { candidates };
-    }
-  }
-  // Include forced list in metadata so the callback can avoid marking them as 'no'
-  if (opts?.forcedPaths && opts.forcedPaths.length) {
-    (body as any).metadata = {
-      ...(body as any).metadata,
-      forcedPaths: opts.forcedPaths.map((s) => String(s || '').trim()).filter(Boolean),
-    };
-  }
 
   const res = await fetchWithRetry('https://api.replicate.com/v1/models/openai/gpt-5-mini/predictions', {
     method: 'POST',
