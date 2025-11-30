@@ -1,5 +1,5 @@
 import type { Env } from '../types.ts';
-import { runJob, runJobForIds, runJobForWikiPaths } from '../services/job.ts';
+import { runJob, runJobForIds, runJobForWikiPaths, runPending } from '../services/job.ts';
 import { getConfig } from '../config.ts';
 import { checkRateLimits } from '../services/rate-limit.ts';
 
@@ -30,35 +30,48 @@ export async function manualRun(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    // Optional: allow targeted reprocessing of specific D1 ids.
-    // Body may be JSON with { ids: number[] }.
-    let ids: number[] | undefined;
-    let wikiPaths: string[] | undefined;
-    const ct = (request.headers.get('Content-Type') || '').toLowerCase();
-    if (ct.includes('application/json')) {
-      try {
-        const body = (await request.json()) as any;
-        if (Array.isArray(body?.ids)) ids = body.ids as number[];
-        if (typeof body?.id === 'number') ids = [body.id];
-        if (Array.isArray(body?.wiki_paths)) wikiPaths = (body.wiki_paths as any[]).map(String);
-        if (typeof body?.wiki_path === 'string') wikiPaths = [String(body.wiki_path)];
-      } catch {
-        // Ignore body parse errors; fall back to full run
-      }
-    }
+	// Optional: allow targeted reprocessing of specific D1 ids/wiki_paths or retry pending batches.
+	// Body may be JSON with { ids: number[] }, { wiki_paths: string[] }, or { retry_pending: true }.
+	let ids: number[] | undefined;
+	let wikiPaths: string[] | undefined;
+	let retryPending = false;
+	let pendingLimit: number | undefined;
+	let model: string | undefined;
+	const ct = (request.headers.get('Content-Type') || '').toLowerCase();
+	if (ct.includes('application/json')) {
+		try {
+			const body = (await request.json()) as any;
+			if (Array.isArray(body?.ids)) ids = body.ids as number[];
+			if (typeof body?.id === 'number') ids = [body.id];
+			if (Array.isArray(body?.wiki_paths)) wikiPaths = (body.wiki_paths as any[]).map(String);
+			if (typeof body?.wiki_path === 'string') wikiPaths = [String(body.wiki_path)];
+			if (body?.retry_pending === true) retryPending = true;
+			const maybeLimit = body?.pending_limit ?? body?.limit;
+			const parsedLimit = Number(maybeLimit);
+			if (Number.isFinite(parsedLimit) && parsedLimit > 0) pendingLimit = parsedLimit;
+			if (typeof body?.model === 'string' && body.model.trim()) model = body.model.trim();
+		} catch {
+			// Ignore body parse errors; fall back to full run
+		}
+	}
 
-    if (ids && ids.length) {
-      const res = await runJobForIds(env, ids);
-      return Response.json({ ok: true, mode: 'ids', ...res });
-    }
+	if (ids && ids.length) {
+		const res = await runJobForIds(env, ids, { model });
+		return Response.json({ ok: true, mode: 'ids', ...res });
+	}
 
-    if (wikiPaths && wikiPaths.length) {
-      const res = await runJobForWikiPaths(env, wikiPaths);
-      return Response.json({ ok: true, mode: 'wiki_paths', ...res });
-    }
+	if (wikiPaths && wikiPaths.length) {
+		const res = await runJobForWikiPaths(env, wikiPaths, { model });
+		return Response.json({ ok: true, mode: 'wiki_paths', ...res });
+	}
 
-    const res = await runJob(env);
-    return Response.json({ ok: true, mode: 'full', ...res });
+	if (retryPending) {
+		const res = await runPending(env, { limit: pendingLimit, model });
+		return Response.json({ ok: true, mode: 'retry_pending', ...res });
+	}
+
+	const res = await runJob(env, { model });
+	return Response.json({ ok: true, mode: 'full', ...res });
   } catch (e: any) {
     return Response.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }

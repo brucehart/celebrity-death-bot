@@ -224,3 +224,20 @@ export async function selectDeathsByWikiPaths(env: Env, wikiPaths: string[]): Pr
   }
   return Array.from(map.values());
 }
+
+// Fetch pending rows awaiting LLM review. Limit results to avoid overlong prompts.
+export async function selectPendingDeaths(env: Env, limit?: number): Promise<DeathEntry[]> {
+  const n = Number(limit);
+  const capped = Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 400) : 200;
+  const res = await env.DB
+    .prepare(
+      `SELECT name, wiki_path, link_type, age, description, cause
+         FROM deaths
+        WHERE llm_result = 'pending'
+        ORDER BY created_at ASC
+        LIMIT ?1`
+    )
+    .bind(capped)
+    .all<DeathEntry>();
+  return (res.results as any as DeathEntry[]) || [];
+}
