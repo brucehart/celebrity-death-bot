@@ -90,6 +90,23 @@ npm run deploy
       https://<your-worker>/run
     ```
     Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the Replicate prompt and won’t be auto-marked `no` if omitted.
+  - **Retry pending Replicate batches:** Re-enqueue rows stuck with `llm_result = 'pending'` (useful after Replicate/OpenAI outages). Defaults to 120 rows per call, split into batches of 30 for safer prompts. Override with `pending_limit` if you want to push more or fewer.
+    ```bash
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"retry_pending":true,"pending_limit":150}' \
+      https://<your-worker>/run
+    ```
+    If more rows remain pending than the limit you send, call it again to drain the backlog.
+  - **Use a different Replicate model (full run, retry, or targeted reprocess):** Include `model` in the JSON body. Default remains `openai/gpt-5-mini`. Example using Gemini 3 Pro for a pending retry:
+    ```bash
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"retry_pending":true,"model":"google/gemini-3-pro"}' \
+      https://<your-worker>/run
+    ```
 - `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
   - Manual override: send the same `Authorization: Bearer <MANUAL_RUN_SECRET>` header that `/run` uses to bypass the HMAC requirement. Useful when you need to craft a callback payload to force a “yes” decision.
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
