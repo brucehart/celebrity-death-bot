@@ -97,7 +97,10 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 		};
 	}
 	// Attach minimal metadata to identify the batch candidates by wiki_path when allowed.
-	if (allowMetadata && (prompt || '').includes('Input (each line:'))) {
+	if (
+		allowMetadata &&
+		(prompt || '').includes('Input (each line:')
+	) {
 		// Best-effort extraction of wiki_paths from prompt for metadata redundancy.
 		const m = /Input \(each line:[\s\S]*?----\n([\s\S]*?)\n----/m.exec(prompt);
 		if (m && m[1]) {
