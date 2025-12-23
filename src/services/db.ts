@@ -67,13 +67,24 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
     .run();
 }
 
-export async function markPendingDeathsAsNo(env: Env) {
-  await env.DB.prepare(
-    `UPDATE deaths
-       SET llm_result = 'no',
-           llm_date_time = CURRENT_TIMESTAMP
-     WHERE llm_result = 'pending'`
-  ).run();
+export async function markDeathsAsNo(env: Env, wikiPaths: string[]) {
+  const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!paths.length) return;
+  const CHUNK = 100; // D1 param limit
+  for (let i = 0; i < paths.length; i += CHUNK) {
+    const chunk = paths.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => `?`).join(',');
+    await env.DB
+      .prepare(
+        `UPDATE deaths
+            SET llm_result = 'no',
+                llm_date_time = CURRENT_TIMESTAMP
+          WHERE llm_result = 'pending'
+            AND wiki_path IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .run();
+  }
 }
 
 export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Record<string, 'active' | 'edit'>> {

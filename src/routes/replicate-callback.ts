@@ -1,7 +1,7 @@
 import type { Env } from '../types.ts';
-import { extractAndParseJSON, coalesceOutput, normalizeToArray } from '../utils/json.ts';
+import { extractAndParseJSON, coalesceOutput, normalizeToArray, isObject } from '../utils/json.ts';
 import { toStr } from '../utils/strings.ts';
-import { getLinkTypeMap, markPendingDeathsAsNo, updateDeathLLM } from '../services/db.ts';
+import { getLinkTypeMap, markDeathsAsNo, updateDeathLLM } from '../services/db.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
@@ -45,7 +45,6 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
   const rawOutput = payload?.output;
   const joined = coalesceOutput(rawOutput).trim();
   if (!joined) {
-    await markPendingDeathsAsNo(env);
     return Response.json({ ok: true, message: 'No output' });
   }
 
@@ -55,13 +54,41 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     return Response.json({ ok: true, message: 'Non-JSON output ignored' });
   }
 
-  const items: Array<Record<string, unknown>> = normalizeToArray(parsed);
+  let selectedItems: Array<Record<string, unknown>> = [];
+  let rejectedPaths: string[] = [];
+
+  if (Array.isArray(parsed)) {
+    selectedItems = normalizeToArray(parsed);
+  } else if (isObject(parsed)) {
+    if ('selected' in parsed || 'rejected' in parsed) {
+      selectedItems = normalizeToArray((parsed as any).selected);
+      const rawRejected = (parsed as any).rejected;
+      if (Array.isArray(rawRejected)) {
+        for (const item of rawRejected) {
+          if (typeof item === 'string') {
+            const p = item.trim();
+            if (p) rejectedPaths.push(p);
+            continue;
+          }
+          if (isObject(item)) {
+            const p = toStr((item as any)['wiki_path']);
+            if (p) rejectedPaths.push(p);
+          }
+        }
+      } else if (isObject(rawRejected)) {
+        const p = toStr((rawRejected as any)['wiki_path']);
+        if (p) rejectedPaths.push(p);
+      }
+    } else {
+      selectedItems = normalizeToArray(parsed);
+    }
+  }
 
   let notified = 0;
-  if (items.length) {
-    const selectedPaths: string[] = items.map((it) => toStr(it['wiki_path'])).filter(Boolean);
+  if (selectedItems.length) {
+    const selectedPaths: string[] = selectedItems.map((it) => toStr(it['wiki_path'])).filter(Boolean);
     const linkTypeMap = selectedPaths.length ? await getLinkTypeMap(env, selectedPaths) : {};
-    for (const it of items) {
+    for (const it of selectedItems) {
       const name = toStr(it['name']);
       if (!name) continue;
       const age = toStr(it['age']);
@@ -83,6 +110,10 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
     }
   }
 
-  await markPendingDeathsAsNo(env);
-  return Response.json({ ok: true, notified });
+  if (rejectedPaths.length) {
+    const selectedSet = new Set(selectedItems.map((it) => toStr(it['wiki_path'])).filter(Boolean));
+    const filtered = rejectedPaths.filter((p) => !selectedSet.has(p));
+    await markDeathsAsNo(env, filtered);
+  }
+  return Response.json({ ok: true, notified, rejected: rejectedPaths.length });
 }
