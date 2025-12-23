@@ -77,7 +77,7 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 			system_prompt: 'Output strictly JSON and nothing else. Return an object with selected/rejected arrays.',
 			verbosity: 'low',
 			reasoning_effort: 'minimal',
-			max_completion_tokens: 4096,
+			max_completion_tokens: 12288,
 		};
 	} else if (model.includes('gemini')) {
 		body.input = {
@@ -87,7 +87,7 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 			temperature: 0.8,
 			top_p: 0.95,
 			thinking_level: 'low',
-			max_output_tokens: 4096,
+			max_output_tokens: 12288,
 		};
 	} else {
 		body.input = {

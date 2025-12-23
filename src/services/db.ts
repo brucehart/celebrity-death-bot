@@ -59,6 +59,7 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
     `UPDATE deaths
        SET cause = ?1,
            description = COALESCE(?2, description),
+           llm_rejection_reason = NULL,
            llm_date_time = CURRENT_TIMESTAMP,
            llm_result = 'yes'
      WHERE wiki_path = ?3`
@@ -67,23 +68,58 @@ export async function updateDeathLLM(env: Env, wiki_path: string, cause: string 
     .run();
 }
 
-export async function markDeathsAsNo(env: Env, wikiPaths: string[]) {
-  const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
-  if (!paths.length) return;
-  const CHUNK = 100; // D1 param limit
-  for (let i = 0; i < paths.length; i += CHUNK) {
-    const chunk = paths.slice(i, i + CHUNK);
-    const placeholders = chunk.map(() => `?`).join(',');
-    await env.DB
+type Rejection = { wiki_path: string; reason?: string | null };
+
+export async function markDeathsAsNo(env: Env, rejects: Array<Rejection | string>) {
+  const items = (rejects || [])
+    .map((item) =>
+      typeof item === 'string'
+        ? { wiki_path: item, reason: null }
+        : { wiki_path: item.wiki_path, reason: item.reason ?? null }
+    )
+    .map((item) => ({
+      wiki_path: String(item.wiki_path || '').trim(),
+      reason: item.reason ? String(item.reason).trim() : null,
+    }))
+    .filter((item) => Boolean(item.wiki_path));
+  if (!items.length) return;
+
+  const statements = items.map((item) =>
+    env.DB
       .prepare(
         `UPDATE deaths
             SET llm_result = 'no',
+                llm_rejection_reason = ?1,
+                llm_date_time = CURRENT_TIMESTAMP
+          WHERE llm_result != 'yes'
+            AND wiki_path = ?2`
+      )
+      .bind(item.reason, item.wiki_path)
+  );
+  const BATCH = 50;
+  for (let i = 0; i < statements.length; i += BATCH) {
+    await env.DB.batch(statements.slice(i, i + BATCH));
+  }
+}
+
+export async function markDeathsAsError(env: Env, wikiPaths: string[]) {
+  const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!paths.length) return;
+  const statements = paths.map((path) =>
+    env.DB
+      .prepare(
+        `UPDATE deaths
+            SET llm_result = 'error',
+                llm_rejection_reason = NULL,
                 llm_date_time = CURRENT_TIMESTAMP
           WHERE llm_result = 'pending'
-            AND wiki_path IN (${placeholders})`
+            AND wiki_path = ?1`
       )
-      .bind(...chunk)
-      .run();
+      .bind(path)
+  );
+  const BATCH = 50;
+  for (let i = 0; i < statements.length; i += BATCH) {
+    await env.DB.batch(statements.slice(i, i + BATCH));
   }
 }
 

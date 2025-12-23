@@ -129,7 +129,7 @@ export async function runPending(env: Env, opts?: { limit?: number; model?: stri
 	const limitRaw = Number(opts?.limit);
 	const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 400) : 120;
 	const excludeSet = new Set((opts?.excludePaths || []).map((s) => String(s || '').trim()).filter(Boolean));
-	const extra = excludeSet.size ? Math.min(excludeSet.size, 400) : 0;
+	const extra = excludeSet.size ? Math.min(excludeSet.size, limit) : 0;
 	const rows = await selectPendingDeaths(env, Math.min(limit + extra, 400));
 	if (!rows.length) return { queued: 0, message: 'No pending rows' } as const;
 	const filtered = excludeSet.size ? rows.filter((row) => !excludeSet.has(String(row.wiki_path || '').trim())) : rows;
@@ -148,7 +148,7 @@ export async function runPending(env: Env, opts?: { limit?: number; model?: stri
 		batches++;
 	}
 
-	const limited = filtered.length >= limit;
+	const limited = filtered.length > selected.length;
 	return { queued, batches, limited } as const;
 }
 
