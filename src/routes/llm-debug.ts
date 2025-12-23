@@ -10,6 +10,7 @@ type LlmRow = {
 	description: string | null;
 	cause: string | null;
 	llm_result: string;
+	llm_rejection_reason: string | null;
 	llm_date_time: string | null;
 	created_at: string;
 };
@@ -147,7 +148,7 @@ function buildQuery(state: QueryState): { sql: string; binds: Array<string | num
 	const limit = state.pageSize + 1;
 	const offset = (state.page - 1) * state.pageSize;
 
-	const sql = `SELECT id, name, wiki_path, link_type, age, description, cause, llm_result, llm_date_time, created_at
+	const sql = `SELECT id, name, wiki_path, link_type, age, description, cause, llm_result, llm_rejection_reason, llm_date_time, created_at
 		FROM deaths
 		${where.length ? `WHERE ${where.join(' AND ')}` : ''}
 		ORDER BY created_at DESC, id DESC
@@ -471,6 +472,7 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
 	const ageHtml = row.age == null ? '—' : highlightText(row.age, highlight, '—');
 	const descriptionHtml = highlightText(row.description, highlight, '—');
 	const causeHtml = highlightText(row.cause, highlight, '—');
+	const rejectionHtml = row.llm_rejection_reason ? highlightText(row.llm_rejection_reason, highlight, '—') : '';
 	const llmLabel = toStr(row.llm_result || 'pending') || 'pending';
 	const badgeClass = `badge-${sanitizeToken(llmLabel)}`;
 	const llmTime = escapeHtml(formatFullDateTime(row.llm_date_time, 'Pending evaluation'));
@@ -493,6 +495,7 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
 	<div class="meta-grid">
 		<div><strong>Description:</strong> ${descriptionHtml}</div>
 		<div><strong>Cause:</strong> ${causeHtml}</div>
+		${rejectionHtml ? `<div><strong>Rejection Reason:</strong> ${rejectionHtml}</div>` : ''}
 		<div><strong>LLM Timestamp:</strong> ${llmTime}</div>
 		<div><strong>Created:</strong> ${createdTime}</div>
 	</div>
