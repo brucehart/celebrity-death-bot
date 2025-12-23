@@ -40,15 +40,13 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
 			  ]
 			: []),
 		'',
-		'**Output format:** JSON array of objects with fields:',
+		'**Output format:** JSON object with fields:',
 		'',
-		'* `name`',
-		'* `age`',
-		'* `description` (10–25 words, why notable to U.S. public)',
-		'* `cause_of_death` (or "unknown")',
-		'* `wiki_path`',
+		'* `selected`: array of objects with fields `name`, `age`, `description` (10–25 words, why notable to U.S. public), `cause_of_death` (or "unknown"), `wiki_path`',
+		'* `rejected`: array of objects with fields `wiki_path` and optional `reason` (<= 10 words)',
 		'',
-		'If no matches, return `[]`. Output strictly JSON, nothing else.',
+		'Place every input line into exactly one of `selected` or `rejected`.',
+		'If no matches, return `{"selected":[],"rejected":[...]}`. Output strictly JSON, nothing else.',
 		'',
 		'----',
 		'Input (each line: name, age, description, cause of death, wiki_path):',
@@ -76,10 +74,10 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 	if (model.startsWith('openai/')) {
 		body.input = {
 			prompt,
-			system_prompt: 'Output strictly JSON and nothing else. If no matches, return an empty JSON array [].',
+			system_prompt: 'Output strictly JSON and nothing else. Return an object with selected/rejected arrays.',
 			verbosity: 'low',
 			reasoning_effort: 'minimal',
-			max_completion_tokens: 4096,
+			max_completion_tokens: 12288,
 		};
 	} else if (model.includes('gemini')) {
 		body.input = {
@@ -89,7 +87,7 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 			temperature: 0.8,
 			top_p: 0.95,
 			thinking_level: 'low',
-			max_output_tokens: 4096,
+			max_output_tokens: 12288,
 		};
 	} else {
 		body.input = {

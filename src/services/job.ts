@@ -115,30 +115,40 @@ export async function runJob(env: Env, opts?: { model?: string }) {
 		await callReplicate(env, prompt, { model: opts?.model });
 	}
 
-	return { scanned: totalParsed, inserted: insertedRows.length };
+	const excludePaths = insertedRows
+		.map((row) => String(row.wiki_path || '').trim())
+		.filter(Boolean);
+	const pendingResult = await runPending(env, { limit: 120, model: opts?.model, excludePaths });
+
+	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued };
 }
 
 // Re-run any existing rows still marked as pending (no Replicate decision yet).
 // Batches requests to keep prompts reasonably small and avoid token overflows.
-export async function runPending(env: Env, opts?: { limit?: number; model?: string }) {
+export async function runPending(env: Env, opts?: { limit?: number; model?: string; excludePaths?: string[] }) {
 	const limitRaw = Number(opts?.limit);
 	const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 400) : 120;
-	const rows = await selectPendingDeaths(env, limit);
+	const excludeSet = new Set((opts?.excludePaths || []).map((s) => String(s || '').trim()).filter(Boolean));
+	const extra = excludeSet.size ? Math.min(excludeSet.size, limit) : 0;
+	const rows = await selectPendingDeaths(env, Math.min(limit + extra, 400));
 	if (!rows.length) return { queued: 0, message: 'No pending rows' } as const;
+	const filtered = excludeSet.size ? rows.filter((row) => !excludeSet.has(String(row.wiki_path || '').trim())) : rows;
+	const selected = filtered.slice(0, limit);
+	if (!selected.length) return { queued: 0, message: 'No pending rows' } as const;
 
 	const CHUNK = 30;
 	let queued = 0;
 	let batches = 0;
 
-	for (let i = 0; i < rows.length; i += CHUNK) {
-		const chunk = rows.slice(i, i + CHUNK);
+	for (let i = 0; i < selected.length; i += CHUNK) {
+		const chunk = selected.slice(i, i + CHUNK);
 		const prompt = buildReplicatePrompt(chunk);
 		await callReplicate(env, prompt, { model: opts?.model });
 		queued += chunk.length;
 		batches++;
 	}
 
-	const limited = rows.length === limit;
+	const limited = filtered.length > selected.length;
 	return { queued, batches, limited } as const;
 }
 
