@@ -115,7 +115,9 @@ export async function runJob(env: Env, opts?: { model?: string }) {
 		await callReplicate(env, prompt, { model: opts?.model });
 	}
 
-	return { scanned: totalParsed, inserted: insertedRows.length };
+	const pendingResult = await runPending(env, { limit: 120, model: opts?.model });
+
+	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued };
 }
 
 // Re-run any existing rows still marked as pending (no Replicate decision yet).
