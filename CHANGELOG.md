@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 – LLM reliability and debug tooling
+
+- LLM debug dashboard at `/llm-debug` with grouping and filters; now shows rejection reasons when present.
+- Replicate improvements: model override support, explicit `rejected` handling, safer callback error parsing, and manual override option.
+- Targeted reprocess via `POST /run` by id/wiki_path with MUST INCLUDE prompt protections.
+- Retry and correctness: auto-retry pending rows, finalize pending results after callbacks, and skip newly inserted pending rows.
+- Operational tuning: configurable `LOOKBACK_DAYS` and updated cron frequency for scans.
+
 ## 1.2.0 – Website, schema, and KV caching
 
 - Website and API: responsive homepage served via Workers Assets; `GET /`, `GET /api/posts`, `GET /api/meta`.
