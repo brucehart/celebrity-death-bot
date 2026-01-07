@@ -1,5 +1,8 @@
 import type { Env } from '../types.ts';
 import { buildSafeUrl, toStr } from '../utils/strings.ts';
+import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
+import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
+import { runJobForIds } from '../services/job.ts';
 
 type LlmRow = {
 	id: number;
@@ -47,6 +50,9 @@ const detailDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
 });
 
 export async function llmDebug(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'POST') {
+		return handlePost(request, env);
+	}
 	const url = new URL(request.url);
 	const state = extractQueryState(url);
 
@@ -69,6 +75,131 @@ export async function llmDebug(request: Request, env: Env): Promise<Response> {
 			'cache-control': 'no-store',
 		},
 	});
+}
+
+async function handlePost(request: Request, env: Env): Promise<Response> {
+	let form: FormData;
+	try {
+		form = await request.formData();
+	} catch {
+		return new Response('Invalid form', { status: 400 });
+	}
+
+	const action = toStr(form.get('action'));
+	const returnTo = sanitizeReturnTo(toStr(form.get('returnTo')));
+
+	if (action === 'replicate') {
+		const id = parseNumericId(form.get('id'));
+		if (id == null) return new Response('Invalid id', { status: 400 });
+		await runJobForIds(env, [id], { model: 'openai/gpt-5-mini' });
+		return redirectTo(returnTo);
+	}
+
+	if (action === 'update') {
+		const id = parseNumericId(form.get('id'));
+		if (id == null) return new Response('Invalid id', { status: 400 });
+
+		const row = await env.DB.prepare(
+			`SELECT id, name, wiki_path, link_type, age, description, cause, llm_result, llm_rejection_reason
+         FROM deaths
+        WHERE id = ?1`
+		)
+			.bind(id)
+			.first<LlmRow>();
+		if (!row) return new Response('Not found', { status: 404 });
+
+		const nextStatus = normalizeLlmResult(toStr(form.get('status')) || row.llm_result);
+		const statusChanged = nextStatus !== row.llm_result;
+
+		const age = parseOptionalInt(toStr(form.get('age')));
+		const description = normalizeOptionalText(form.get('description'));
+		const cause = normalizeOptionalText(form.get('cause'));
+
+		const rejection = nextStatus === 'yes' ? null : row.llm_rejection_reason ?? null;
+		const llmDateSql = statusChanged
+			? nextStatus === 'yes'
+				? 'CURRENT_TIMESTAMP'
+				: 'NULL'
+			: 'llm_date_time';
+
+		const sql = `UPDATE deaths
+        SET age = ?1,
+            description = ?2,
+            cause = ?3,
+            llm_result = ?4,
+            llm_rejection_reason = ?5,
+            llm_date_time = ${llmDateSql}
+      WHERE id = ?6`;
+
+		await env.DB.prepare(sql).bind(age, description, cause, nextStatus, rejection, id).run();
+
+		if (statusChanged && nextStatus === 'yes') {
+			const msg = buildTelegramMessage({
+				name: row.name,
+				age,
+				description,
+				cause,
+				wiki_path: row.wiki_path,
+				link_type: row.link_type,
+			});
+			await notifyTelegram(env, msg);
+			const xText = buildXStatus({
+				name: row.name,
+				age,
+				description,
+				cause,
+				wiki_path: row.wiki_path,
+				link_type: row.link_type,
+			});
+			await postToXIfConfigured(env, xText);
+		}
+
+		return redirectTo(returnTo);
+	}
+
+	return new Response('Unsupported action', { status: 400 });
+}
+
+function sanitizeReturnTo(raw: string): string {
+	const trimmed = raw.trim();
+	if (!trimmed) return '/llm-debug';
+	if (trimmed.startsWith('/llm-debug')) return trimmed;
+	return '/llm-debug';
+}
+
+function redirectTo(location: string): Response {
+	return new Response(null, {
+		status: 303,
+		headers: {
+			location,
+		},
+	});
+}
+
+function parseNumericId(value: unknown): number | null {
+	const raw = typeof value === 'string' ? value : toStr(value);
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed)) return null;
+	const id = Math.floor(parsed);
+	return id > 0 ? id : null;
+}
+
+function parseOptionalInt(raw: string): number | null {
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	const n = Number(trimmed);
+	return Number.isFinite(n) ? Math.floor(n) : null;
+}
+
+function normalizeOptionalText(value: FormDataEntryValue | null): string | null {
+	if (typeof value !== 'string') return null;
+	const trimmed = value.trim();
+	return trimmed ? trimmed : null;
+}
+
+function normalizeLlmResult(value: string): string {
+	const raw = value.trim().toLowerCase();
+	return LLM_RESULT_OPTIONS.includes(raw) ? raw : 'pending';
 }
 
 function extractQueryState(url: URL): QueryState {
@@ -292,6 +423,9 @@ function renderPage(
 	nextParams.set('page', String(state.page + 1));
 	const prevParams = new URLSearchParams(baseParams);
 	prevParams.set('page', String(Math.max(1, state.page - 1)));
+	const currentParams = new URLSearchParams(baseParams);
+	currentParams.set('page', String(state.page));
+	const returnTo = `/llm-debug${currentParams.toString() ? `?${currentParams.toString()}` : ''}`;
 
 	const formLlmr = renderCheckboxGroup('llmResult', 'LLM Result', LLM_RESULT_OPTIONS, state.llmResults);
 	const formLink = renderCheckboxGroup('linkType', 'Link Type', LINK_TYPE_OPTIONS, state.linkTypes);
@@ -350,6 +484,19 @@ function renderPage(
 		.result-main h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 		.result-main h3 a { font-weight: 700; color: var(--text); }
 		.result-main h3 span.name-disabled { font-weight: 700; color: var(--muted); }
+		.result-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+		.edit-panel { border: 1px dashed var(--border); border-radius: 12px; background: rgba(255,255,255,0.7); padding: 8px 12px; }
+		.edit-panel summary { cursor: pointer; font-weight: 600; color: var(--accent); list-style: none; }
+		.edit-panel summary::-webkit-details-marker { display: none; }
+		.edit-form { margin-top: 10px; display: grid; gap: 10px; }
+		.edit-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+		.edit-grid label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+		.edit-grid input, .edit-grid textarea, .edit-grid select { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; background: #fff; }
+		.edit-grid textarea { resize: vertical; min-height: 72px; }
+		button.secondary { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-weight: 600; cursor: pointer; color: var(--text); }
+		button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+		.replicate-form { display: flex; align-items: center; gap: 10px; }
+		.helper { color: var(--muted); font-size: 0.82rem; }
 		.badge-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
 		.badge-yes { background: rgba(31, 157, 103, 0.14); color: var(--success); }
 		.badge-no { background: rgba(214, 69, 93, 0.14); color: var(--danger); }
@@ -422,7 +569,7 @@ function renderPage(
 			${state.llmResults.length ? `<div class="badge">LLM: ${state.llmResults.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			${state.linkTypes.length ? `<div class="badge">Links: ${state.linkTypes.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 		</section>
-		${groups.length ? renderGroups(groups, highlight) : `<div class="empty">No results found for the selected filters.</div>`}
+		${groups.length ? renderGroups(groups, highlight, returnTo) : `<div class="empty">No results found for the selected filters.</div>`}
 		<nav class="pagination">
 			${renderPagerLink('Newer', `/llm-debug?${prevParams.toString()}`, pageMeta.hasPrev)}
 			${renderPagerLink('Older', `/llm-debug?${nextParams.toString()}`, pageMeta.hasNext)}
@@ -449,14 +596,18 @@ function renderCheckboxGroup<T extends string>(name: string, labelText: string, 
 </div>`;
 }
 
-function renderGroups(groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>, highlight: HighlightConfig | null): string {
+function renderGroups(
+	groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>,
+	highlight: HighlightConfig | null,
+	returnTo: string
+): string {
 	return `<section class="groups">
 	${groups
 		.map(
 			(group) => `<article class="group">
 			<div class="group-header">${escapeHtml(group.label)}</div>
 			<div class="group-items">
-				${group.rows.map((row) => renderRow(row, highlight)).join('')}
+				${group.rows.map((row) => renderRow(row, highlight, returnTo)).join('')}
 			</div>
 		</article>`
 		)
@@ -464,7 +615,7 @@ function renderGroups(groups: Array<{ key: string | null; label: string; rows: L
 </section>`;
 }
 
-function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
+function renderRow(row: LlmRow, highlight: HighlightConfig | null, returnTo: string): string {
 	const isActive = row.link_type === 'active';
 	const url = isActive ? buildSafeUrl(row.wiki_path) : '';
 	const nameHtml = highlightText(row.name, highlight, '—');
@@ -480,6 +631,12 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
 	const nameBlock = isActive
 		? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${nameHtml}</a>`
 		: `<span class="name-disabled">${nameHtml}</span>`;
+	const statusOptions = LLM_RESULT_OPTIONS.map(
+		(opt) => `<option value="${escapeHtml(opt)}"${opt === llmLabel ? ' selected' : ''}>${escapeHtml(opt)}</option>`
+	).join('');
+	const ageValue = row.age == null ? '' : String(row.age);
+	const descriptionValue = row.description ?? '';
+	const causeValue = row.cause ?? '';
 
 	return `<div class="result-card">
 	<div class="result-main">
@@ -498,6 +655,38 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null): string {
 		${rejectionHtml ? `<div><strong>Rejection Reason:</strong> ${rejectionHtml}</div>` : ''}
 		<div><strong>LLM Timestamp:</strong> ${llmTime}</div>
 		<div><strong>Created:</strong> ${createdTime}</div>
+		<div class="result-actions">
+			<details class="edit-panel">
+				<summary>Update</summary>
+				<form class="edit-form" method="post">
+					<input type="hidden" name="action" value="update" />
+					<input type="hidden" name="id" value="${row.id}" />
+					<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
+					<div class="edit-grid">
+						<label>Status
+							<select name="status">${statusOptions}</select>
+						</label>
+						<label>Age
+							<input type="number" name="age" min="0" step="1" value="${escapeHtml(ageValue)}" />
+						</label>
+						<label>Cause
+							<input type="text" name="cause" value="${escapeHtml(causeValue)}" />
+						</label>
+						<label>Description
+							<textarea name="description">${escapeHtml(descriptionValue)}</textarea>
+						</label>
+					</div>
+					<button class="apply" type="submit">Save Changes</button>
+				</form>
+			</details>
+			<form class="replicate-form" method="post">
+				<input type="hidden" name="action" value="replicate" />
+				<input type="hidden" name="id" value="${row.id}" />
+				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
+				<button class="secondary" type="submit">Refresh via Replicate</button>
+				<span class="helper">Model: gpt-5-mini</span>
+			</form>
+		</div>
 	</div>
 </div>`;
 }
