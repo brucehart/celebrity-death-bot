@@ -2,7 +2,7 @@ import type { Env } from '../types.ts';
 import { buildSafeUrl, toStr } from '../utils/strings.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
-import { runJobForIds } from '../services/job.ts';
+import { runJob, runJobForIds } from '../services/job.ts';
 import { requireAuth } from '../auth.ts';
 
 type LlmRow = {
@@ -50,14 +50,15 @@ const detailDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
 	timeStyle: 'medium',
 });
 
-export async function llmDebug(request: Request, env: Env): Promise<Response> {
+export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (auth instanceof Response) return auth;
 	if (request.method === 'POST') {
-		return handlePost(request, env);
+		return handlePost(request, env, ctx);
 	}
 	const url = new URL(request.url);
 	const state = extractQueryState(url);
+	const notice = toStr(url.searchParams.get('notice')).trim();
 
 	const { sql, binds } = buildQuery(state);
 	const res = await env.DB.prepare(sql).bind(...binds).all<LlmRow>();
@@ -70,7 +71,7 @@ export async function llmDebug(request: Request, env: Env): Promise<Response> {
 
 	const groups = groupRows(pageRows);
 	const highlight = buildHighlightConfig(state.search);
-	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight);
+	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight, notice || null);
 
 	return new Response(html, {
 		headers: {
@@ -80,7 +81,7 @@ export async function llmDebug(request: Request, env: Env): Promise<Response> {
 	});
 }
 
-async function handlePost(request: Request, env: Env): Promise<Response> {
+async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	let form: FormData;
 	try {
 		form = await request.formData();
@@ -90,6 +91,20 @@ async function handlePost(request: Request, env: Env): Promise<Response> {
 
 	const action = toStr(form.get('action'));
 	const returnTo = sanitizeReturnTo(toStr(form.get('returnTo')));
+
+	if (action === 'run-cron') {
+		ctx.waitUntil(
+			(async () => {
+				try {
+					const res = await runJob(env);
+					console.log('Manual run via /llm-debug complete', res);
+				} catch (err) {
+					console.error('Manual run via /llm-debug error', err);
+				}
+			})()
+		);
+		return redirectTo(addNoticeToReturnTo(request, returnTo, 'Job started'));
+	}
 
 	if (action === 'replicate') {
 		const id = parseNumericId(form.get('id'));
@@ -168,6 +183,16 @@ function sanitizeReturnTo(raw: string): string {
 	if (!trimmed) return '/llm-debug';
 	if (trimmed.startsWith('/llm-debug')) return trimmed;
 	return '/llm-debug';
+}
+
+function addNoticeToReturnTo(request: Request, returnTo: string, notice: string): string {
+	try {
+		const url = new URL(returnTo, request.url);
+		url.searchParams.set('notice', notice);
+		return `${url.pathname}${url.search}`;
+	} catch {
+		return '/llm-debug';
+	}
 }
 
 function redirectTo(location: string): Response {
@@ -410,7 +435,8 @@ function renderPage(
 	groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>,
 	state: QueryState,
 	pageMeta: { hasNext: boolean; hasPrev: boolean },
-	highlight: HighlightConfig | null
+	highlight: HighlightConfig | null,
+	notice: string | null
 ) {
 	const baseParams = new URLSearchParams();
 	if (state.search) baseParams.set('search', state.search);
@@ -498,6 +524,8 @@ function renderPage(
 		.edit-grid textarea { resize: vertical; min-height: 72px; }
 		button.secondary { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-weight: 600; cursor: pointer; color: var(--text); }
 		button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+		button.danger { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(214, 69, 93, 0.55); background: rgba(214, 69, 93, 0.12); font-weight: 700; cursor: pointer; color: var(--danger); }
+		button.danger:hover { border-color: var(--danger); background: rgba(214, 69, 93, 0.18); }
 		.replicate-form { display: flex; align-items: center; gap: 10px; }
 		.helper { color: var(--muted); font-size: 0.82rem; }
 		.badge-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
@@ -512,6 +540,16 @@ function renderPage(
 		.pagination a { padding: 10px 18px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); font-weight: 600; color: var(--text); }
 		.pagination a[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
 		.empty { padding: 60px 24px; text-align: center; color: var(--muted); background: var(--panel); border-radius: 18px; border: 1px dashed var(--border); }
+		.notice { margin: 14px 0 0; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(36, 87, 245, 0.25); background: rgba(36, 87, 245, 0.08); color: var(--text); font-weight: 600; }
+		.notice small { display: block; margin-top: 4px; color: var(--muted); font-weight: 500; }
+		dialog.confirm-dialog { border: none; border-radius: 16px; padding: 0; width: min(460px, calc(100vw - 32px)); box-shadow: 0 30px 80px rgba(15, 22, 42, 0.28); }
+		dialog.confirm-dialog::backdrop { background: rgba(15, 22, 42, 0.55); }
+		.confirm-inner { padding: 18px 18px 14px; background: #fff; }
+		.confirm-inner h2 { margin: 0; font-size: 1.05rem; }
+		.confirm-inner p { margin: 10px 0 0; color: var(--muted); line-height: 1.35; }
+		.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px 18px; background: #fff; border-top: 1px solid var(--border); }
+		button.confirm { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(214, 69, 93, 0.55); background: var(--danger); color: #fff; font-weight: 700; cursor: pointer; }
+		button.confirm:hover { filter: brightness(0.95); }
 		mark { background: var(--accent-soft); color: var(--text); padding: 0 4px; border-radius: 4px; font-weight: 600; }
 		@media (max-width: 720px) {
 			header, .container { padding: 18px 16px; }
@@ -565,19 +603,79 @@ function renderPage(
 				<a class="reset" href="/llm-debug">Reset</a>
 			</div>
 		</form>
+		${notice ? `<div class="notice">${escapeHtml(notice)}<small>Refresh the page in a bit to see new records and updated LLM results.</small></div>` : ''}
 		<section class="summary">
 			<div class="badge">Page ${state.page}</div>
 			<div class="badge">Showing ${groups.reduce((acc, g) => acc + g.rows.length, 0)} of ${state.pageSize} rows</div>
 			${state.search ? `<div class="badge">Search: <strong>${escapeHtml(state.search)}</strong></div>` : ''}
 			${state.llmResults.length ? `<div class="badge">LLM: ${state.llmResults.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			${state.linkTypes.length ? `<div class="badge">Links: ${state.linkTypes.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
+			<form class="replicate-form" method="post" data-confirm="Run the full cron job now?" data-confirm-cta="Yes, run it">
+				<input type="hidden" name="action" value="run-cron" />
+				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
+				<button class="danger" type="submit">Run Cron Processing</button>
+			</form>
 		</section>
 		${groups.length ? renderGroups(groups, highlight, returnTo) : `<div class="empty">No results found for the selected filters.</div>`}
 		<nav class="pagination">
 			${renderPagerLink('Newer', `/llm-debug?${prevParams.toString()}`, pageMeta.hasPrev)}
 			${renderPagerLink('Older', `/llm-debug?${nextParams.toString()}`, pageMeta.hasNext)}
 		</nav>
+		<dialog id="confirmDialog" class="confirm-dialog">
+			<div class="confirm-inner">
+				<h2>Are you sure?</h2>
+				<p id="confirmDetail"></p>
+			</div>
+			<div class="confirm-actions">
+				<button class="secondary" type="button" data-cancel>Cancel</button>
+				<button class="confirm" type="button" data-confirm>Confirm</button>
+			</div>
+		</dialog>
 	</main>
+	<script>
+		(() => {
+			const dialog = document.getElementById('confirmDialog');
+			if (!(dialog instanceof HTMLDialogElement)) return;
+
+			const detail = document.getElementById('confirmDetail');
+			const cancel = dialog.querySelector('[data-cancel]');
+			const confirm = dialog.querySelector('[data-confirm]');
+			let pendingForm = null;
+
+			document.addEventListener(
+				'submit',
+				(e) => {
+					const form = e.target;
+					if (!(form instanceof HTMLFormElement)) return;
+					const message = form.getAttribute('data-confirm');
+					if (!message) return;
+					const cta = form.getAttribute('data-confirm-cta');
+					e.preventDefault();
+					pendingForm = form;
+					if (detail) detail.textContent = message;
+					if (confirm instanceof HTMLButtonElement) confirm.textContent = cta || 'Confirm';
+					dialog.showModal();
+				},
+				true
+			);
+
+			dialog.addEventListener('cancel', () => {
+				pendingForm = null;
+			});
+
+			cancel?.addEventListener('click', () => {
+				pendingForm = null;
+				dialog.close();
+			});
+
+			confirm?.addEventListener('click', () => {
+				const form = pendingForm;
+				pendingForm = null;
+				dialog.close();
+				if (form) form.submit();
+			});
+		})();
+	</script>
 </body>
 </html>`;
 }
@@ -682,7 +780,7 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null, returnTo: str
 					<button class="apply" type="submit">Save Changes</button>
 				</form>
 			</details>
-			<form class="replicate-form" method="post">
+			<form class="replicate-form" method="post" data-confirm="Refresh via Replicate?" data-confirm-cta="Yes, refresh">
 				<input type="hidden" name="action" value="replicate" />
 				<input type="hidden" name="id" value="${row.id}" />
 				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
