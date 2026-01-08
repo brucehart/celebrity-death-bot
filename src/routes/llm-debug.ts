@@ -3,6 +3,7 @@ import { buildSafeUrl, toStr } from '../utils/strings.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { runJobForIds } from '../services/job.ts';
+import { requireAuth } from '../auth.ts';
 
 type LlmRow = {
 	id: number;
@@ -50,6 +51,8 @@ const detailDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
 });
 
 export async function llmDebug(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (auth instanceof Response) return auth;
 	if (request.method === 'POST') {
 		return handlePost(request, env);
 	}

@@ -13,6 +13,7 @@ import { xOauthStart, xOauthCallback, xOauthStatus } from './services/x.ts';
 import { getRecentPosts } from './routes/posts.ts';
 import { getMeta } from './routes/meta.ts';
 import { llmDebug } from './routes/llm-debug.ts';
+import { login, oauthCallback } from './routes/auth.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
@@ -24,6 +25,8 @@ const router = new Router()
   .on('GET', '/api/meta', (_req, env) => getMeta(env))
   .on('GET', '/llm-debug', (req, env) => llmDebug(req, env))
   .on('POST', '/llm-debug', (req, env) => llmDebug(req, env))
+  .on('GET', '/login', (req, env) => login(req, env))
+  .on('GET', '/oauth/callback', (req, env) => oauthCallback(req, env))
   .on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
   .on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(env, req.url, env.BASE_URL))
   .on('GET', '/x/oauth/status', (_req, env) => xOauthStatus(env))

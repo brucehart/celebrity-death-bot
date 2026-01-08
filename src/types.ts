@@ -10,6 +10,13 @@ export interface Env {
   REPLICATE_WEBHOOK_SECRET?: string;
   MANUAL_RUN_SECRET: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  // Google OAuth for /llm-debug
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  OAUTH_CALLBACK_URL: string;
+  SESSION_HMAC_KEY: string;
+  // Comma/space/semicolon delimited list of permitted Google account emails
+  ALLOWED_GOOGLE_ACCOUNTS?: string;
   // X (Twitter) OAuth 2.0 credentials and encryption key
   // X_CLIENT_ID is required to initiate OAuth (PKCE). X_CLIENT_SECRET is optional (used when supported).
   X_CLIENT_ID?: string;

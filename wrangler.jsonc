@@ -40,7 +40,10 @@
     "X_PROFILE_URL": "https://x.com/CelebDeathBot",
     "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot",
     // Include previous month when current NY day is <= LOOKBACK_DAYS
-    "LOOKBACK_DAYS": "15"
+    "LOOKBACK_DAYS": "15",
+    // Comma/space/semicolon delimited list of permitted Google account emails
+    "ALLOWED_GOOGLE_ACCOUNTS": "bruce.hart@gmail.com",
+    "OAUTH_CALLBACK_URL": "https://celebritydeathbot.com/oauth/callback"
   },
 
   // Optional but nice for debugging in the dashboard
