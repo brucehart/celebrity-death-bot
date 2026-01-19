@@ -1,7 +1,7 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { toNYYear, parseWikipedia } from './wiki.ts';
 import { insertBatchReturningNew, selectDeathsByIds, selectDeathsByWikiPaths, selectPendingDeaths } from './db.ts';
-import { buildReplicatePrompt, callReplicate } from './replicate.ts';
+import { evaluateDeaths, getDefaultLlmProvider, normalizeLlmProvider } from './llm.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUnique, uniqueSorted, tryAcquireMonthLock, releaseMonthLock } from './kv-monthly.ts';
@@ -9,10 +9,11 @@ import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUni
 // Orchestrates a single scan-and-notify run:
 // 1) Fetch the current (and early-month previous) Wikipedia "Deaths in <Month> <Year>" pages.
 // 2) Parse entries, compare with a monthly KV cache to identify truly new wiki_paths.
-// 3) Insert new rows into D1 in a safe batch and enqueue LLM filtering via Replicate.
+// 3) Insert new rows into D1 in a safe batch and enqueue LLM filtering via the configured provider.
 
-export async function runJob(env: Env, opts?: { model?: string }) {
+export async function runJob(env: Env, opts?: { model?: string; provider?: string; pendingLimit?: number }) {
 	const cfg = getConfig(env);
+	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
 	const year = toNYYear();
 
 	// Determine target months in America/New_York tz
@@ -111,64 +112,97 @@ export async function runJob(env: Env, opts?: { model?: string }) {
 	const insertedRows = await insertBatchReturningNew(env, allNewEntries);
 
 	if (insertedRows.length > 0) {
-		const prompt = buildReplicatePrompt(insertedRows);
-		await callReplicate(env, prompt, { model: opts?.model });
+		if (provider === 'openai' && insertedRows.length > 20) {
+			for (let i = 0; i < insertedRows.length; i += 20) {
+				const chunk = insertedRows.slice(i, i + 20);
+				await evaluateDeaths(env, chunk, { model: opts?.model, provider });
+			}
+		} else {
+			await evaluateDeaths(env, insertedRows, { model: opts?.model, provider });
+		}
 	}
 
 	const excludePaths = insertedRows
 		.map((row) => String(row.wiki_path || '').trim())
 		.filter(Boolean);
-	const pendingResult = await runPending(env, { limit: 120, model: opts?.model, excludePaths });
+	const pendingResult = await runPending(env, { limit: opts?.pendingLimit, model: opts?.model, provider, excludePaths });
 
 	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued };
 }
 
-// Re-run any existing rows still marked as pending (no Replicate decision yet).
+// Re-run any existing rows still marked as pending (no LLM decision yet).
 // Batches requests to keep prompts reasonably small and avoid token overflows.
-export async function runPending(env: Env, opts?: { limit?: number; model?: string; excludePaths?: string[] }) {
+export async function runPending(
+	env: Env,
+	opts?: { limit?: number; model?: string; excludePaths?: string[]; provider?: string; drain?: boolean }
+) {
+	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
+	const drain = provider === 'openai' && opts?.drain === true;
 	const limitRaw = Number(opts?.limit);
-	const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 400) : 120;
+	const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : drain ? Number.POSITIVE_INFINITY : 120;
+	const maxTotal = provider === 'replicate' && Number.isFinite(limit) ? Math.min(limit, 400) : limit;
 	const excludeSet = new Set((opts?.excludePaths || []).map((s) => String(s || '').trim()).filter(Boolean));
-	const extra = excludeSet.size ? Math.min(excludeSet.size, limit) : 0;
-	const rows = await selectPendingDeaths(env, Math.min(limit + extra, 400));
-	if (!rows.length) return { queued: 0, message: 'No pending rows' } as const;
-	const filtered = excludeSet.size ? rows.filter((row) => !excludeSet.has(String(row.wiki_path || '').trim())) : rows;
-	const selected = filtered.slice(0, limit);
-	if (!selected.length) return { queued: 0, message: 'No pending rows' } as const;
 
-	const CHUNK = 30;
+	const CHUNK = provider === 'openai' ? 20 : 30;
 	let queued = 0;
 	let batches = 0;
+	let notified = 0;
+	let rejected = 0;
+	let errored = 0;
+	let sawRows = false;
 
-	for (let i = 0; i < selected.length; i += CHUNK) {
-		const chunk = selected.slice(i, i + CHUNK);
-		const prompt = buildReplicatePrompt(chunk);
-		await callReplicate(env, prompt, { model: opts?.model });
-		queued += chunk.length;
-		batches++;
+	while (queued < maxTotal) {
+		const remaining = Number.isFinite(maxTotal) ? Math.max(0, maxTotal - queued) : 400;
+		if (Number.isFinite(maxTotal) && remaining <= 0) break;
+		const extra = excludeSet.size ? Math.min(excludeSet.size, 400) : 0;
+		const fetchLimit = Math.min(400, remaining + extra);
+
+		const rows = await selectPendingDeaths(env, fetchLimit);
+		if (!rows.length) {
+			if (!sawRows) return { queued: 0, message: 'No pending rows', provider } as const;
+			break;
+		}
+		sawRows = true;
+
+		const filtered = excludeSet.size ? rows.filter((row) => !excludeSet.has(String(row.wiki_path || '').trim())) : rows;
+		const sliceLimit = Number.isFinite(maxTotal) ? Math.min(filtered.length, maxTotal - queued) : filtered.length;
+		const selected = filtered.slice(0, sliceLimit);
+		if (!selected.length) return { queued: 0, message: 'No pending rows', provider } as const;
+
+		for (let i = 0; i < selected.length; i += CHUNK) {
+			const chunk = selected.slice(i, i + CHUNK);
+			const res = await evaluateDeaths(env, chunk, { model: opts?.model, provider });
+			queued += chunk.length;
+			batches++;
+			if (provider === 'openai' && 'notified' in res) {
+				notified += res.notified;
+				rejected += res.rejected;
+				errored += res.errored;
+			}
+		}
+
+		if (provider === 'replicate') break;
+		if (rows.length < fetchLimit) break;
 	}
 
-	const limited = filtered.length > selected.length;
-	return { queued, batches, limited } as const;
+	const limited = Number.isFinite(maxTotal) ? queued >= maxTotal : false;
+	return { queued, batches, limited, notified, rejected, errored, provider } as const;
 }
 
 // Re-enqueue specific existing rows (by D1 ids) for LLM filtering & summary.
-// This builds a prompt only for the requested rows and calls Replicate. The
-// standard /replicate/callback will process results and send notifications.
-export async function runJobForIds(env: Env, ids: number[], opts?: { model?: string }) {
+// For Replicate, results are processed later by /replicate/callback.
+export async function runJobForIds(env: Env, ids: number[], opts?: { model?: string; provider?: string }) {
 	const rows = await selectDeathsByIds(env, ids);
 	if (!rows.length) return { queued: 0, message: 'No matching ids' } as const;
 	const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
-	const prompt = buildReplicatePrompt(rows, forcedPaths);
-	await callReplicate(env, prompt, { forcedPaths, model: opts?.model });
-	return { queued: rows.length } as const;
+	const res = await evaluateDeaths(env, rows, { forcedPaths, model: opts?.model, provider: opts?.provider });
+	return { queued: rows.length, ...res } as const;
 }
 
-export async function runJobForWikiPaths(env: Env, wikiPaths: string[], opts?: { model?: string }) {
+export async function runJobForWikiPaths(env: Env, wikiPaths: string[], opts?: { model?: string; provider?: string }) {
 	const rows = await selectDeathsByWikiPaths(env, wikiPaths);
 	if (!rows.length) return { queued: 0, message: 'No matching wiki_paths' } as const;
 	const forcedPaths = Array.from(new Set(rows.map((r) => String(r.wiki_path || '').trim()).filter(Boolean)));
-	const prompt = buildReplicatePrompt(rows, forcedPaths);
-	await callReplicate(env, prompt, { forcedPaths, model: opts?.model });
-	return { queued: rows.length } as const;
+	const res = await evaluateDeaths(env, rows, { forcedPaths, model: opts?.model, provider: opts?.provider });
+	return { queued: rows.length, ...res } as const;
 }

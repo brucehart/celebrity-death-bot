@@ -31,12 +31,13 @@ export async function manualRun(request: Request, env: Env): Promise<Response> {
 
   try {
 	// Optional: allow targeted reprocessing of specific D1 ids/wiki_paths or retry pending batches.
-	// Body may be JSON with { ids: number[] }, { wiki_paths: string[] }, or { retry_pending: true }.
+	// Body may be JSON with { ids: number[] }, { wiki_paths: string[] }, { retry_pending: true }, plus optional { model, provider }.
 	let ids: number[] | undefined;
 	let wikiPaths: string[] | undefined;
 	let retryPending = false;
 	let pendingLimit: number | undefined;
 	let model: string | undefined;
+	let provider: string | undefined;
 	const ct = (request.headers.get('Content-Type') || '').toLowerCase();
 	if (ct.includes('application/json')) {
 		try {
@@ -50,27 +51,29 @@ export async function manualRun(request: Request, env: Env): Promise<Response> {
 			const parsedLimit = Number(maybeLimit);
 			if (Number.isFinite(parsedLimit) && parsedLimit > 0) pendingLimit = parsedLimit;
 			if (typeof body?.model === 'string' && body.model.trim()) model = body.model.trim();
+			if (typeof body?.provider === 'string' && body.provider.trim()) provider = body.provider.trim();
+			if (typeof body?.llm_provider === 'string' && body.llm_provider.trim()) provider = body.llm_provider.trim();
 		} catch {
 			// Ignore body parse errors; fall back to full run
 		}
 	}
 
 	if (ids && ids.length) {
-		const res = await runJobForIds(env, ids, { model });
+		const res = await runJobForIds(env, ids, { model, provider });
 		return Response.json({ ok: true, mode: 'ids', ...res });
 	}
 
 	if (wikiPaths && wikiPaths.length) {
-		const res = await runJobForWikiPaths(env, wikiPaths, { model });
+		const res = await runJobForWikiPaths(env, wikiPaths, { model, provider });
 		return Response.json({ ok: true, mode: 'wiki_paths', ...res });
 	}
 
 	if (retryPending) {
-		const res = await runPending(env, { limit: pendingLimit, model });
+		const res = await runPending(env, { limit: pendingLimit, model, provider, drain: pendingLimit == null });
 		return Response.json({ ok: true, mode: 'retry_pending', ...res });
 	}
 
-	const res = await runJob(env, { model });
+	const res = await runJob(env, { model, provider });
 	return Response.json({ ok: true, mode: 'full', ...res });
   } catch (e: any) {
     return Response.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });

@@ -2,7 +2,7 @@ import type { Env, DeathEntry } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 
-const DEFAULT_MODEL = 'openai/gpt-5-mini';
+export const DEFAULT_REPLICATE_MODEL = 'openai/gpt-5-mini';
 
 export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?: string[]): string {
 	const lines = newEntries.map((e) => {
@@ -44,6 +44,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
 		'',
 		'* `selected`: array of objects with fields `name`, `age`, `description` (10–25 words, why notable to U.S. public), `cause_of_death` (or "unknown"), `wiki_path`',
 		'* `rejected`: array of objects with fields `wiki_path` and optional `reason` (<= 10 words)',
+		'* Use the input `wiki_path` exactly as provided (no `/wiki/` prefix or full URL).',
 		'',
 		'Place every input line into exactly one of `selected` or `rejected`.',
 		'If no matches, return `{"selected":[],"rejected":[...]}`. Output strictly JSON, nothing else.',
@@ -58,7 +59,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
 
 export async function callReplicate(env: Env, prompt: string, opts?: { forcedPaths?: string[]; model?: string }) {
 	const cfg = getConfig(env);
-	const model = (opts?.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+	const model = (opts?.model || DEFAULT_REPLICATE_MODEL).trim() || DEFAULT_REPLICATE_MODEL;
 	// Some hosted models (e.g., OpenAI GPT-5 endpoints) reject unknown top-level fields such as `metadata`.
 	// Only attach metadata when the model is known to tolerate it.
 	const allowMetadata = !model.startsWith('openai/');

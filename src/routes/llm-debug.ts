@@ -3,6 +3,7 @@ import { buildSafeUrl, toStr } from '../utils/strings.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
 import { runJob, runJobForIds } from '../services/job.ts';
+import { getDefaultLlmModel, getDefaultLlmProvider } from '../services/llm.ts';
 import { requireAuth } from '../auth.ts';
 
 type LlmRow = {
@@ -59,6 +60,9 @@ export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext
 	const url = new URL(request.url);
 	const state = extractQueryState(url);
 	const notice = toStr(url.searchParams.get('notice')).trim();
+	const llmProvider = getDefaultLlmProvider(env);
+	const llmModel = getDefaultLlmModel(llmProvider);
+	const llmProviderLabel = llmProvider === 'replicate' ? 'Replicate' : 'OpenAI';
 
 	const { sql, binds } = buildQuery(state);
 	const res = await env.DB.prepare(sql).bind(...binds).all<LlmRow>();
@@ -71,7 +75,11 @@ export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext
 
 	const groups = groupRows(pageRows);
 	const highlight = buildHighlightConfig(state.search);
-	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight, notice || null);
+	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight, notice || null, {
+		provider: llmProvider,
+		providerLabel: llmProviderLabel,
+		model: llmModel,
+	});
 
 	return new Response(html, {
 		headers: {
@@ -93,10 +101,24 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 	const returnTo = sanitizeReturnTo(toStr(form.get('returnTo')));
 
 	if (action === 'run-cron') {
+		const provider = getDefaultLlmProvider(env);
+		if (provider === 'openai') {
+			const useBackground = !!env.OPENAI_WEBHOOK_SECRET;
+			try {
+				const res = await runJob(env, { provider, pendingLimit: 20 });
+				console.log('Manual run via /llm-debug complete', res);
+			} catch (err) {
+				console.error('Manual run via /llm-debug error', err);
+				return redirectTo(addNoticeToReturnTo(request, returnTo, 'Job failed'));
+			}
+			const notice = useBackground ? 'Job queued (OpenAI webhook processing)' : 'Job completed';
+			return redirectTo(addNoticeToReturnTo(request, returnTo, notice));
+		}
+
 		ctx.waitUntil(
 			(async () => {
 				try {
-					const res = await runJob(env);
+					const res = await runJob(env, { provider });
 					console.log('Manual run via /llm-debug complete', res);
 				} catch (err) {
 					console.error('Manual run via /llm-debug error', err);
@@ -106,10 +128,10 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 		return redirectTo(addNoticeToReturnTo(request, returnTo, 'Job started'));
 	}
 
-	if (action === 'replicate') {
+	if (action === 'reevaluate' || action === 'replicate') {
 		const id = parseNumericId(form.get('id'));
 		if (id == null) return new Response('Invalid id', { status: 400 });
-		await runJobForIds(env, [id], { model: 'openai/gpt-5-mini' });
+		await runJobForIds(env, [id]);
 		return redirectTo(returnTo);
 	}
 
@@ -436,7 +458,8 @@ function renderPage(
 	state: QueryState,
 	pageMeta: { hasNext: boolean; hasPrev: boolean },
 	highlight: HighlightConfig | null,
-	notice: string | null
+	notice: string | null,
+	llmMeta: { provider: string; providerLabel: string; model: string }
 ) {
 	const baseParams = new URLSearchParams();
 	if (state.search) baseParams.set('search', state.search);
@@ -526,7 +549,7 @@ function renderPage(
 		button.secondary:hover { border-color: var(--accent); color: var(--accent); }
 		button.danger { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(214, 69, 93, 0.55); background: rgba(214, 69, 93, 0.12); font-weight: 700; cursor: pointer; color: var(--danger); }
 		button.danger:hover { border-color: var(--danger); background: rgba(214, 69, 93, 0.18); }
-		.replicate-form { display: flex; align-items: center; gap: 10px; }
+		.llm-form { display: flex; align-items: center; gap: 10px; }
 		.helper { color: var(--muted); font-size: 0.82rem; }
 		.badge-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
 		.badge-yes { background: rgba(31, 157, 103, 0.14); color: var(--success); }
@@ -564,7 +587,9 @@ function renderPage(
 			<img class="brand-logo" src="/Celebrity-Death-Bot.png" alt="Celebrity Death Bot logo" />
 			<div class="header-copy">
 				<h1>LLM Evaluation Debug</h1>
-				<p class="subtitle">Inspect Replicate outputs grouped by record creation time, with filters for deeper investigation.</p>
+				<p class="subtitle">Inspect LLM outputs grouped by record creation time. Default: ${escapeHtml(llmMeta.providerLabel)} (${escapeHtml(
+		llmMeta.model
+	)}).</p>
 			</div>
 		</div>
 	</header>
@@ -610,13 +635,13 @@ function renderPage(
 			${state.search ? `<div class="badge">Search: <strong>${escapeHtml(state.search)}</strong></div>` : ''}
 			${state.llmResults.length ? `<div class="badge">LLM: ${state.llmResults.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			${state.linkTypes.length ? `<div class="badge">Links: ${state.linkTypes.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
-			<form class="replicate-form" method="post" data-confirm="Run the full cron job now?" data-confirm-cta="Yes, run it">
+			<form class="llm-form" method="post" data-confirm="Run the full cron job now?" data-confirm-cta="Yes, run it">
 				<input type="hidden" name="action" value="run-cron" />
 				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
 				<button class="danger" type="submit">Run Cron Processing</button>
 			</form>
 		</section>
-		${groups.length ? renderGroups(groups, highlight, returnTo) : `<div class="empty">No results found for the selected filters.</div>`}
+		${groups.length ? renderGroups(groups, highlight, returnTo, llmMeta) : `<div class="empty">No results found for the selected filters.</div>`}
 		<nav class="pagination">
 			${renderPagerLink('Newer', `/llm-debug?${prevParams.toString()}`, pageMeta.hasPrev)}
 			${renderPagerLink('Older', `/llm-debug?${nextParams.toString()}`, pageMeta.hasNext)}
@@ -700,7 +725,8 @@ function renderCheckboxGroup<T extends string>(name: string, labelText: string, 
 function renderGroups(
 	groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>,
 	highlight: HighlightConfig | null,
-	returnTo: string
+	returnTo: string,
+	llmMeta: { provider: string; providerLabel: string; model: string }
 ): string {
 	return `<section class="groups">
 	${groups
@@ -708,7 +734,7 @@ function renderGroups(
 			(group) => `<article class="group">
 			<div class="group-header">${escapeHtml(group.label)}</div>
 			<div class="group-items">
-				${group.rows.map((row) => renderRow(row, highlight, returnTo)).join('')}
+				${group.rows.map((row) => renderRow(row, highlight, returnTo, llmMeta)).join('')}
 			</div>
 		</article>`
 		)
@@ -716,7 +742,12 @@ function renderGroups(
 </section>`;
 }
 
-function renderRow(row: LlmRow, highlight: HighlightConfig | null, returnTo: string): string {
+function renderRow(
+	row: LlmRow,
+	highlight: HighlightConfig | null,
+	returnTo: string,
+	llmMeta: { provider: string; providerLabel: string; model: string }
+): string {
 	const isActive = row.link_type === 'active';
 	const url = isActive ? buildSafeUrl(row.wiki_path) : '';
 	const nameHtml = highlightText(row.name, highlight, '—');
@@ -780,12 +811,12 @@ function renderRow(row: LlmRow, highlight: HighlightConfig | null, returnTo: str
 					<button class="apply" type="submit">Save Changes</button>
 				</form>
 			</details>
-			<form class="replicate-form" method="post" data-confirm="Refresh via Replicate?" data-confirm-cta="Yes, refresh">
-				<input type="hidden" name="action" value="replicate" />
+			<form class="llm-form" method="post" data-confirm="Refresh via LLM?" data-confirm-cta="Yes, refresh">
+				<input type="hidden" name="action" value="reevaluate" />
 				<input type="hidden" name="id" value="${row.id}" />
 				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
-				<button class="secondary" type="submit">Refresh via Replicate</button>
-				<span class="helper">Model: gpt-5-mini</span>
+				<button class="secondary" type="submit">Refresh via LLM</button>
+				<span class="helper">Provider: ${escapeHtml(llmMeta.providerLabel)} • Model: ${escapeHtml(llmMeta.model)}</span>
 			</form>
 		</div>
 	</div>
