@@ -262,6 +262,8 @@ export async function postToXIfConfigured(env: Env, text: string): Promise<void>
     if (!res.ok) {
       const t = await res.text();
       console.warn('X post failed', res.status, t.slice(0, 500));
+    } else {
+      await res.text();
     }
   } catch (err) {
     console.warn('X post error', (err as any)?.message || String(err));

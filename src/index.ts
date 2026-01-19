@@ -5,6 +5,7 @@
 import type { Env } from './types.ts';
 import { Router } from './router.ts';
 import { replicateCallback } from './routes/replicate-callback.ts';
+import { openaiWebhook } from './routes/openai-webhook.ts';
 import { manualRun } from './routes/run.ts';
 import { telegramWebhook } from './routes/telegram-webhook.ts';
 import { health } from './routes/health.ts';
@@ -17,6 +18,7 @@ import { login, oauthCallback } from './routes/auth.ts';
 
 const router = new Router()
   .on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
+  .on('POST', '/openai/webhook', (req, env) => openaiWebhook(req, env))
   .on('POST', '/telegram/webhook', (req, env) => telegramWebhook(req, env))
   .on('POST', '/run', (req, env) => manualRun(req, env))
   // Serve homepage via Workers Assets. Pass the original request for headers/method consistency.

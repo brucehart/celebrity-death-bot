@@ -11,7 +11,9 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 1. **Fetches Wikipedia**: The worker retrieves `https://en.wikipedia.org/wiki/Deaths_in_<year>` where `<year>` is the current year in the America/New_York timezone.
 2. **Parses entries**: From the page, it extracts each person's name, Wikipedia path, age, description and cause of death.
 3. **Stores in D1**: Entries are stored in a D1 database. Items already in the database are ignored.
-4. **LLM evaluation**: Newly discovered entries are sent to Replicate for LLM evaluation. The worker exposes a webhook to receive callbacks from Replicate.
+4. **LLM evaluation**: Newly discovered entries are evaluated via OpenAI (default) or Replicate (optional). Replicate uses a webhook callback; OpenAI is evaluated inline.
+
+If `OPENAI_WEBHOOK_SECRET` is set, OpenAI requests are sent in background mode and results are processed via `POST /openai/webhook`. Configure the webhook in the OpenAI dashboard to subscribe to `response.completed`.
 5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to subscribed chats.
 6. **X (Twitter) posting**: If X OAuth 2.0 is connected, each approved result is also posted to the timeline.
 
@@ -20,10 +22,13 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 The worker expects the following bindings and environment variables:
 
 - `DB` – D1 database binding used to persist entries.
-- `REPLICATE_API_TOKEN` – API token for Replicate.
+- `OPENAI_API_KEY` – OpenAI API key used for Responses API calls (default provider).
+- `OPENAI_WEBHOOK_SECRET` – OpenAI webhook signing secret (optional; enables background Responses + `/openai/webhook` processing).
+- `LLM_PROVIDER` – Optional provider override: `openai` (default) or `replicate`.
+- `REPLICATE_API_TOKEN` – API token for Replicate (required only when `LLM_PROVIDER=replicate`).
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
-- `BASE_URL` – Public URL of the worker, used when building webhook URLs.
-- `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret. When set, the
+- `BASE_URL` – Public URL of the worker, used when building Replicate webhook URLs.
+- `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret (only when using Replicate). When set, the
   worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
 - X (Twitter) OAuth 2.0 (PKCE) configuration:
@@ -32,6 +37,16 @@ The worker expects the following bindings and environment variables:
   - `X_ENC_KEY` – base64 AES-256-GCM key to encrypt tokens in D1
 
 When connected once via OAuth 2.0, the worker stores and refreshes tokens and posts via `POST /2/tweets` with a Bearer token.
+
+Store secrets with Wrangler (once per environment):
+```bash
+wrangler secret put OPENAI_API_KEY
+wrangler secret put OPENAI_WEBHOOK_SECRET     # optional (OpenAI webhooks)
+wrangler secret put REPLICATE_API_TOKEN      # only if using Replicate
+wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put MANUAL_RUN_SECRET
+wrangler secret put REPLICATE_WEBHOOK_SECRET # optional (Replicate only)
+```
 
 ### Cron schedule
 
@@ -64,7 +79,7 @@ npm run deploy
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
       https://<your-worker>/run
     ```
-  - **Targeted reprocess by IDs:** Re-enqueue specific `deaths.id` rows for Replicate summarization and normal processing (Telegram/X via the existing callback). These IDs are explicitly flagged in the prompt as MUST INCLUDE so the model accepts them as notable.
+  - **Targeted reprocess by IDs:** Re-evaluate specific `deaths.id` rows via the configured LLM provider (OpenAI default). These IDs are explicitly flagged in the prompt as MUST INCLUDE so the model accepts them as notable.
     ```bash
     curl -X POST \
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
@@ -89,8 +104,16 @@ npm run deploy
       -d '{"wiki_paths":["Jane_Doe","/wiki/John_Smith","/w/index.php?title=Greg_O%2727Connell&action=edit&redlink=1"]}' \
       https://<your-worker>/run
     ```
-    Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the Replicate prompt and won’t be auto-marked `no` if omitted.
-  - **Retry pending Replicate batches:** Re-enqueue rows stuck with `llm_result = 'pending'` (useful after Replicate/OpenAI outages). Defaults to 120 rows per call, split into batches of 30 for safer prompts. Override with `pending_limit` if you want to push more or fewer.
+    Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the LLM prompt and won’t be auto-marked `no` if omitted.
+  - **Retry pending LLM batches:** Re-evaluate rows stuck with `llm_result = 'pending'` (useful after LLM outages). For OpenAI (default), omit `pending_limit` to drain all pending rows; add `pending_limit` to cap volume. For Replicate, the default remains 120 rows per call, split into batches of 30 for safer prompts.
+    ```bash
+    curl -X POST \
+      -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
+      -H "Content-Type: application/json" \
+      -d '{"retry_pending":true}' \
+      https://<your-worker>/run
+    ```
+    To cap the batch size, include `pending_limit`:
     ```bash
     curl -X POST \
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
@@ -98,17 +121,17 @@ npm run deploy
       -d '{"retry_pending":true,"pending_limit":150}' \
       https://<your-worker>/run
     ```
-    If more rows remain pending than the limit you send, call it again to drain the backlog.
-  - **Use a different Replicate model (full run, retry, or targeted reprocess):** Include `model` in the JSON body. Default remains `openai/gpt-5-mini`. Example using Gemini 3 Pro for a pending retry:
+  - **Use a different provider/model (full run, retry, or targeted reprocess):** Include `provider` in the JSON body to switch between `openai` and `replicate`. For OpenAI, use model IDs like `gpt-5-mini`. For Replicate, use model paths like `openai/gpt-5-mini` or `google/gemini-3-pro`.
     ```bash
     curl -X POST \
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
       -H "Content-Type: application/json" \
-      -d '{"retry_pending":true,"model":"google/gemini-3-pro"}' \
+      -d '{"retry_pending":true,"provider":"replicate","model":"google/gemini-3-pro"}' \
       https://<your-worker>/run
     ```
-- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (signed by Replicate; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
+- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (only when using `LLM_PROVIDER=replicate`; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
   - Manual override: send the same `Authorization: Bearer <MANUAL_RUN_SECRET>` header that `/run` uses to bypass the HMAC requirement. Useful when you need to craft a callback payload to force a “yes” decision.
+- `POST /openai/webhook` – Endpoint for OpenAI webhook callbacks (enable by setting `OPENAI_WEBHOOK_SECRET` and configuring the webhook in the OpenAI dashboard for `response.completed`, `response.failed`, and `response.cancelled`).
 - `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
 - `GET /health` – Simple health check returning `ok`.
 
@@ -190,7 +213,7 @@ Notes
 
 ## X (Twitter) Posting
 
-The worker can post each Replicate-approved death to X (Twitter) at `x.com/CelebDeathBot`.
+The worker can post each LLM-approved death to X (Twitter) at `x.com/CelebDeathBot`.
 
 - Format matches Telegram, but the Wikipedia link is appended at the end (since X posts cannot embed clickable HTML links):
   - Example: `🚨💀Jane Doe (88) : American actor and philanthropist - cancer 💀🚨\nhttps://en.wikipedia.org/wiki/Jane_Doe`
@@ -218,6 +241,8 @@ Security notes
 
 ## Replicate Webhook Signing (HMAC)
 
+Only required when using `LLM_PROVIDER=replicate`.
+
 Replicate signs each webhook delivery. This worker verifies signatures to prevent spoofed or replayed requests.
 
 - Headers used: `webhook-id`, `webhook-timestamp` (seconds), `webhook-signature`.
@@ -241,6 +266,14 @@ Notes
 - Do not append secrets to the webhook URL. This worker no longer uses `?secret=...` for Replicate callbacks; it relies on HMAC verification only.
 - The secret format is `whsec_<base64>`. Only the base64 part is used as the raw HMAC key.
 - The worker uses constant-time comparison and enforces a 5-minute timestamp tolerance to mitigate replay attacks.
+
+## OpenAI Webhooks
+
+When `OPENAI_WEBHOOK_SECRET` is set, OpenAI requests are sent in background mode and results are processed via `POST /openai/webhook`. Configure a webhook endpoint in the OpenAI dashboard and subscribe to `response.completed`, `response.failed`, and `response.cancelled`.
+
+- Headers used: `webhook-id`, `webhook-timestamp`, `webhook-signature`
+- Signed content: `${webhook-id}.${webhook-timestamp}.${rawBody}`
+- Algorithm: HMAC-SHA256 with your OpenAI webhook signing secret (supports `whsec_...` format)
 
 ## Testing
 

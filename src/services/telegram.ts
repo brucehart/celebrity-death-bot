@@ -122,6 +122,8 @@ export async function notifyTelegram(env: Env, text: string) {
     );
     if (!res.ok) {
       console.warn('Telegram send failed', chat_id, await res.text());
+    } else {
+      await res.text();
     }
   }
 }
@@ -141,5 +143,7 @@ export async function notifyTelegramSingle(env: Env, chat_id: string | number, t
   );
   if (!res.ok) {
     console.warn('Telegram reply failed', chat_id, await res.text());
+  } else {
+    await res.text();
   }
 }
