@@ -2,7 +2,7 @@ import type { Env } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-nano';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
 
 export function normalizeOpenAIModel(raw?: string): string {
 	const trimmed = String(raw || '').trim();
