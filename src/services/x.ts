@@ -210,16 +210,29 @@ export async function xOauthStatus(env: Env): Promise<Response> {
 
 // ---------- Posting ----------
 
-// Build X post matching Telegram content, but with the Wikipedia link appended at the end.
+// Build X post matching Telegram content, optionally with the Wikipedia link appended at the end.
 type PostInput = { name?: string | null; age?: string | number | null; description?: string | null; cause?: string | null; wiki_path?: string | null; link_type?: 'active' | 'edit' | null };
 
-export function buildXStatus({ name, age, description, cause, wiki_path, link_type }: PostInput): string {
+function isEnabledFlag(value?: string): boolean {
+  const normalized = (value || '').trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
+
+export function shouldPostToX(env: Env): boolean {
+  return isEnabledFlag(env.POST_TO_X);
+}
+
+export function shouldIncludeWikipediaLinkInXPost(env: Env): boolean {
+  return isEnabledFlag(env.X_POST_INCLUDE_WIKIPEDIA_LINK);
+}
+
+export function buildXStatus({ name, age, description, cause, wiki_path, link_type }: PostInput, opts?: { includeWikipediaLink?: boolean }): string {
   const safeName = (name ?? '').toString().trim();
   const safeAge = age == null || age === '' ? '' : ` (${String(age).trim()})`;
   const safeDesc = (description ?? '').toString().trim();
   const causeRaw = (cause ?? '').toString().trim();
   const hasCause = causeRaw && causeRaw.toLowerCase() !== 'unknown';
-  const url = link_type === 'active' && wiki_path ? buildSafeUrl(wiki_path || '') : '';
+  const url = opts?.includeWikipediaLink && link_type === 'active' && wiki_path ? buildSafeUrl(wiki_path || '') : '';
 
   const bodyParts: string[] = [];
   bodyParts.push('🚨💀 ');
@@ -247,6 +260,9 @@ function truncateToCodepoints(s: string, max: number): string {
 }
 
 export async function postToXIfConfigured(env: Env, text: string): Promise<void> {
+  if (!shouldPostToX(env)) {
+    return;
+  }
   // Ensure we have an access token (refresh if needed)
   const token = await refreshIfNeeded(env);
   if (!token) {

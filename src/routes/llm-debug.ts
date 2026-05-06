@@ -1,7 +1,7 @@
 import type { Env } from '../types.ts';
 import { buildSafeUrl, toStr } from '../utils/strings.ts';
 import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
-import { buildXStatus, postToXIfConfigured } from '../services/x.ts';
+import { buildXStatus, postToXIfConfigured, shouldIncludeWikipediaLinkInXPost } from '../services/x.ts';
 import { runJob, runJobForIds } from '../services/job.ts';
 import { getDefaultLlmModel, getDefaultLlmProvider } from '../services/llm.ts';
 import { requireAuth } from '../auth.ts';
@@ -183,14 +183,17 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 				link_type: row.link_type,
 			});
 			await notifyTelegram(env, msg);
-			const xText = buildXStatus({
-				name: row.name,
-				age,
-				description,
-				cause,
-				wiki_path: row.wiki_path,
-				link_type: row.link_type,
-			});
+			const xText = buildXStatus(
+				{
+					name: row.name,
+					age,
+					description,
+					cause,
+					wiki_path: row.wiki_path,
+					link_type: row.link_type,
+				},
+				{ includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) }
+			);
 			await postToXIfConfigured(env, xText);
 		}
 
@@ -545,8 +548,8 @@ function renderPage(
 		.edit-grid label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 		.edit-grid input, .edit-grid textarea, .edit-grid select { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; background: #fff; }
 		.edit-grid textarea { resize: vertical; min-height: 72px; }
-		button.secondary { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-weight: 600; cursor: pointer; color: var(--text); }
-		button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+		button.secondary, a.secondary { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-weight: 600; cursor: pointer; color: var(--text); font: inherit; line-height: 1.2; }
+		button.secondary:hover, a.secondary:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 		button.danger { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(214, 69, 93, 0.55); background: rgba(214, 69, 93, 0.12); font-weight: 700; cursor: pointer; color: var(--danger); }
 		button.danger:hover { border-color: var(--danger); background: rgba(214, 69, 93, 0.18); }
 		.llm-form { display: flex; align-items: center; gap: 10px; }
@@ -769,6 +772,22 @@ function renderRow(
 	const ageValue = row.age == null ? '' : String(row.age);
 	const descriptionValue = row.description ?? '';
 	const causeValue = row.cause ?? '';
+	const manualXUrl =
+		llmLabel === 'yes'
+			? buildTweetIntentUrl(
+					buildXStatus(
+						{
+							name: row.name,
+							age: row.age,
+							description: row.description,
+							cause: row.cause,
+							wiki_path: row.wiki_path,
+							link_type: row.link_type,
+						},
+						{ includeWikipediaLink: true }
+					)
+				)
+			: '';
 
 	return `<div class="result-card">
 	<div class="result-main">
@@ -818,9 +837,16 @@ function renderRow(
 				<button class="secondary" type="submit">Refresh via LLM</button>
 				<span class="helper">Provider: ${escapeHtml(llmMeta.providerLabel)} • Model: ${escapeHtml(llmMeta.model)}</span>
 			</form>
+			${manualXUrl ? `<a class="secondary" href="${escapeHtml(manualXUrl)}" target="_blank" rel="noopener noreferrer">Post to X</a>` : ''}
 		</div>
 	</div>
 </div>`;
+}
+
+function buildTweetIntentUrl(text: string): string {
+	const url = new URL('https://twitter.com/intent/tweet');
+	url.searchParams.set('text', text);
+	return url.toString();
 }
 
 function renderPagerLink(label: string, href: string, enabled: boolean): string {

@@ -27,6 +27,9 @@ export interface Env {
   X_CLIENT_SECRET?: string;
   // Symmetric key (base64) to encrypt tokens at rest in D1
   X_ENC_KEY?: string;
+  // Optional: automatic X posting flags. Missing or non-true values are treated as false.
+  POST_TO_X?: string;
+  X_POST_INCLUDE_WIKIPEDIA_LINK?: string;
   // Optional: configure rate limits for /run as "60:3,3600:20"
   RUN_RATE_LIMITS?: string;
   // Optional: LLM provider override ("openai" or "replicate")

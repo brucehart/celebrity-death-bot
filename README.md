@@ -35,6 +35,8 @@ The worker expects the following bindings and environment variables:
   - `X_CLIENT_ID` – OAuth 2.0 client ID for your X App
   - `X_CLIENT_SECRET` – (optional) client secret; included when present
   - `X_ENC_KEY` – base64 AES-256-GCM key to encrypt tokens in D1
+  - `POST_TO_X` – Set to `true` to automatically post approved deaths to X. Missing or any other value disables automatic X posting.
+  - `X_POST_INCLUDE_WIKIPEDIA_LINK` – Set to `true` to append Wikipedia links to automatic X posts. Missing or any other value omits the link.
 
 When connected once via OAuth 2.0, the worker stores and refreshes tokens and posts via `POST /2/tweets` with a Bearer token.
 
@@ -215,7 +217,10 @@ Notes
 
 The worker can post each LLM-approved death to X (Twitter) at `x.com/CelebDeathBot`.
 
-- Format matches Telegram, but the Wikipedia link is appended at the end (since X posts cannot embed clickable HTML links):
+- Automatic posting is disabled unless `POST_TO_X=true`.
+- Automatic X posts omit Wikipedia links unless `X_POST_INCLUDE_WIKIPEDIA_LINK=true`.
+- The `/llm-debug` dashboard includes a manual **Post to X** button for approved rows. It opens X's browser composer with the Wikipedia link included.
+- When link inclusion is enabled, format matches Telegram, but the Wikipedia link is appended at the end (since X posts cannot embed clickable HTML links):
   - Example: `🚨💀Jane Doe (88) : American actor and philanthropist - cancer 💀🚨\nhttps://en.wikipedia.org/wiki/Jane_Doe`
 - Length is constrained to 280 characters with t.co URL weighting (23 chars). The body text is truncated with an ellipsis if necessary.
 
