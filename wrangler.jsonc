@@ -39,6 +39,10 @@
     "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev",
     "X_PROFILE_URL": "https://x.com/CelebDeathBot",
     "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot",
+    // Automatic X posting is disabled unless this is explicitly true.
+    "POST_TO_X": "false",
+    // Automatic X posts omit Wikipedia links unless this is explicitly true.
+    "X_POST_INCLUDE_WIKIPEDIA_LINK": "false",
     // Include previous month when current NY day is <= LOOKBACK_DAYS
     "LOOKBACK_DAYS": "15",
     // Comma/space/semicolon delimited list of permitted Google account emails

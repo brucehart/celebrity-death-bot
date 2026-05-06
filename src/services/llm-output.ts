@@ -3,7 +3,7 @@ import { extractAndParseJSON, normalizeToArray, isObject } from '../utils/json.t
 import { toStr } from '../utils/strings.ts';
 import { getLinkTypeMap, markDeathsAsError, markDeathsAsNo, updateDeathLLM } from './db.ts';
 import { buildTelegramMessage, notifyTelegram } from './telegram.ts';
-import { buildXStatus, postToXIfConfigured } from './x.ts';
+import { buildXStatus, postToXIfConfigured, shouldIncludeWikipediaLinkInXPost } from './x.ts';
 
 type SelectedRejected = {
 	selected?: Array<Record<string, unknown>>;
@@ -193,7 +193,7 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 
 			const msg = buildTelegramMessage({ name, age, description: desc, cause, wiki_path, link_type });
 			await notifyTelegram(env, msg);
-			const xText = buildXStatus({ name, age, description: desc, cause, wiki_path, link_type });
+			const xText = buildXStatus({ name, age, description: desc, cause, wiki_path, link_type }, { includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) });
 			await postToXIfConfigured(env, xText);
 			notified++;
 
