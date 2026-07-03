@@ -4,7 +4,16 @@ import { insertBatchReturningNew, selectDeathsByIds, selectDeathsByWikiPaths, se
 import { evaluateDeaths, getDefaultLlmProvider, normalizeLlmProvider } from './llm.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
-import { YearMonth, getMonthlyPaths, putMonthlyPaths, diffSorted, mergeSortedUnique, uniqueSorted, tryAcquireMonthLock, releaseMonthLock } from './kv-monthly.ts';
+import {
+	YearMonth,
+	getMonthlyPaths,
+	putMonthlyPaths,
+	diffSorted,
+	mergeSortedUnique,
+	uniqueSorted,
+	tryAcquireMonthLock,
+	releaseMonthLock,
+} from './kv-monthly.ts';
 
 // Orchestrates a single scan-and-notify run:
 // 1) Fetch the current (and early-month previous) Wikipedia "Deaths in <Month> <Year>" pages.
@@ -26,13 +35,13 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 		new Date().toLocaleString('en-US', {
 			timeZone: cfg.tz,
 			month: 'numeric',
-		})
+		}),
 	);
 	const dayNY = Number(
 		new Date().toLocaleString('en-US', {
 			timeZone: cfg.tz,
 			day: 'numeric',
-		})
+		}),
 	);
 	const targets: YearMonth[] = [{ year, month: monthNY }];
 	if (!Number.isNaN(dayNY) && dayNY <= lookbackDays) {
@@ -57,6 +66,8 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 	];
 
 	const allNewEntries: DeathEntry[] = [];
+	const seenNewPaths = new Set<string>();
+	const monthlyUpdates: Array<{ ym: YearMonth; paths: string[] }> = [];
 	let totalParsed = 0;
 
 	for (const ym of targets) {
@@ -70,12 +81,12 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 					'User-Agent': 'cf-worker-celeb-deaths/1.0 (+https://workers.cloudflare.com/)',
 				},
 			},
-			{ timeoutMs: cfg.limits.fetchTimeoutMs, retries: cfg.limits.fetchRetries }
+			{ timeoutMs: cfg.limits.fetchTimeoutMs, retries: cfg.limits.fetchRetries },
 		);
 		if (!res.ok) throw new Error(`Fetch failed ${res.status}: ${targetUrl}`);
 
 		const html = await res.text();
-		const parsed = parseWikipedia(html);
+		const parsed = parseWikipedia(html, { monthName });
 		totalParsed += parsed.length;
 
 		// Build sorted sets for KV comparison
@@ -89,27 +100,38 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 			for (const e of parsed) {
 				if (!map[e.wiki_path]) map[e.wiki_path] = e;
 			}
+			const updatePaths: string[] = [];
 			for (const p of newPaths) {
 				const row = map[p];
-				if (row) allNewEntries.push(row);
-			}
-
-			// Try to update month KV under a short-lived lock
-			const gotLock = await tryAcquireMonthLock(env, ym);
-			try {
-				if (gotLock) {
-					const latestExisting = uniqueSorted(await getMonthlyPaths(env, ym));
-					const merged = mergeSortedUnique(latestExisting, uniqueSorted(newPaths));
-					await putMonthlyPaths(env, ym, merged);
+				if (row) {
+					updatePaths.push(row.wiki_path);
+					if (!seenNewPaths.has(row.wiki_path)) {
+						seenNewPaths.add(row.wiki_path);
+						allNewEntries.push(row);
+					}
 				}
-			} finally {
-				if (gotLock) await releaseMonthLock(env, ym);
 			}
+			if (updatePaths.length) monthlyUpdates.push({ ym, paths: uniqueSorted(updatePaths) });
 		}
 	}
 
 	// Insert into D1 with a single batched operation that returns the newly inserted rows
 	const insertedRows = await insertBatchReturningNew(env, allNewEntries);
+
+	// Only advance the monthly cache after D1 accepted the insert/upsert batch. If D1 is down,
+	// the next run should retry the same Wikipedia paths instead of treating them as already seen.
+	for (const update of monthlyUpdates) {
+		const gotLock = await tryAcquireMonthLock(env, update.ym);
+		try {
+			if (gotLock) {
+				const latestExisting = uniqueSorted(await getMonthlyPaths(env, update.ym));
+				const merged = mergeSortedUnique(latestExisting, update.paths);
+				await putMonthlyPaths(env, update.ym, merged);
+			}
+		} finally {
+			if (gotLock) await releaseMonthLock(env, update.ym);
+		}
+	}
 
 	if (insertedRows.length > 0) {
 		if (provider === 'openai' && insertedRows.length > 20) {
@@ -122,9 +144,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 		}
 	}
 
-	const excludePaths = insertedRows
-		.map((row) => String(row.wiki_path || '').trim())
-		.filter(Boolean);
+	const excludePaths = insertedRows.map((row) => String(row.wiki_path || '').trim()).filter(Boolean);
 	const pendingResult = await runPending(env, { limit: opts?.pendingLimit, model: opts?.model, provider, excludePaths });
 
 	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued };
@@ -134,7 +154,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 // Batches requests to keep prompts reasonably small and avoid token overflows.
 export async function runPending(
 	env: Env,
-	opts?: { limit?: number; model?: string; excludePaths?: string[]; provider?: string; drain?: boolean }
+	opts?: { limit?: number; model?: string; excludePaths?: string[]; provider?: string; drain?: boolean },
 ) {
 	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
 	const drain = provider === 'openai' && opts?.drain === true;
