@@ -20,6 +20,20 @@ import {
 // 2) Parse entries, compare with a monthly KV cache to identify truly new wiki_paths.
 // 3) Insert new rows into D1 in a safe batch and enqueue LLM filtering via the configured provider.
 
+export type JobMonthScan = {
+	year: number;
+	month: number;
+	scanned: number;
+	newPaths: number;
+};
+
+export type JobResult = {
+	scanned: number;
+	inserted: number;
+	retried: number;
+	months: JobMonthScan[];
+};
+
 export async function runJob(env: Env, opts?: { model?: string; provider?: string; pendingLimit?: number }) {
 	const cfg = getConfig(env);
 	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
@@ -68,6 +82,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 	const allNewEntries: DeathEntry[] = [];
 	const seenNewPaths = new Set<string>();
 	const monthlyUpdates: Array<{ ym: YearMonth; paths: string[] }> = [];
+	const months: JobMonthScan[] = [];
 	let totalParsed = 0;
 
 	for (const ym of targets) {
@@ -93,6 +108,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 		const scrapedSorted = uniqueSorted(parsed.map((e) => e.wiki_path));
 		const existingSorted = uniqueSorted(await getMonthlyPaths(env, ym));
 		const newPaths = diffSorted(existingSorted, scrapedSorted);
+		months.push({ year: ym.year, month: ym.month, scanned: parsed.length, newPaths: newPaths.length });
 
 		if (newPaths.length) {
 			// Map wiki_path -> entry for quick filter
@@ -147,7 +163,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 	const excludePaths = insertedRows.map((row) => String(row.wiki_path || '').trim()).filter(Boolean);
 	const pendingResult = await runPending(env, { limit: opts?.pendingLimit, model: opts?.model, provider, excludePaths });
 
-	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued };
+	return { scanned: totalParsed, inserted: insertedRows.length, retried: pendingResult.queued, months } satisfies JobResult;
 }
 
 // Re-run any existing rows still marked as pending (no LLM decision yet).

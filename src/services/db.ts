@@ -200,6 +200,29 @@ export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Rec
 }
 
 type Subscriber = { type: string; chat_id: string; enabled: number };
+export type JobFreshness = {
+	count: number;
+	latest_created_at: string | null;
+	latest_llm_date_time: string | null;
+};
+
+export async function getJobFreshness(env: Env): Promise<JobFreshness> {
+	const row = await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`SELECT COUNT(*) AS count,
+                    MAX(created_at) AS latest_created_at,
+                    MAX(llm_date_time) AS latest_llm_date_time
+               FROM deaths`,
+			).first<JobFreshness>(),
+		'getJobFreshness',
+	);
+	return {
+		count: Number(row?.count || 0),
+		latest_created_at: row?.latest_created_at ?? null,
+		latest_llm_date_time: row?.latest_llm_date_time ?? null,
+	};
+}
 
 export async function getTelegramChatIds(env: Env): Promise<string[]> {
 	const rows = await withD1Retry(

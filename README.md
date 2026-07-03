@@ -8,14 +8,14 @@ Celebrity Death Bot is a Cloudflare Worker that runs on a scheduled Cron trigger
 
 ## How it works
 
-1. **Fetches Wikipedia**: The worker retrieves `https://en.wikipedia.org/wiki/Deaths_in_<year>` where `<year>` is the current year in the America/New_York timezone.
-2. **Parses entries**: From the page, it extracts each person's name, Wikipedia path, age, description and cause of death.
+1. **Fetches Wikipedia**: The worker retrieves the current month, and early in the month also the previous month, using `https://en.wikipedia.org/wiki/Deaths_in_<Month>_<Year>`.
+2. **Parses entries**: From the target month section, it extracts each person's name, Wikipedia path, age, description and cause of death.
 3. **Stores in D1**: Entries are stored in a D1 database. Items already in the database are ignored.
 4. **LLM evaluation**: Newly discovered entries are evaluated via OpenAI (default) or Replicate (optional). Replicate uses a webhook callback; OpenAI is evaluated inline.
-
-If `OPENAI_WEBHOOK_SECRET` is set, OpenAI requests are sent in background mode and results are processed via `POST /openai/webhook`. Configure the webhook in the OpenAI dashboard to subscribe to `response.completed`.
 5. **Telegram notifications**: When the callback provides results, the worker sends a message via Telegram to subscribed chats.
 6. **X (Twitter) posting**: If X OAuth 2.0 is connected, each approved result is also posted to the timeline.
+
+If `OPENAI_WEBHOOK_SECRET` is set, OpenAI requests are sent in background mode and results are processed via `POST /openai/webhook`. Configure the webhook in the OpenAI dashboard to subscribe to `response.completed`.
 
 ## Configuration
 
@@ -27,10 +27,14 @@ The worker expects the following bindings and environment variables:
 - `LLM_PROVIDER` – Optional provider override: `openai` (default) or `replicate`.
 - `REPLICATE_API_TOKEN` – API token for Replicate (required only when `LLM_PROVIDER=replicate`).
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
+- `TELEGRAM_ALERT_CHAT_ID` – Optional direct Telegram chat ID(s) for operational job alerts. Comma/space/semicolon delimited. Falls back to `TELEGRAM_CHAT_IDS` when present.
 - `BASE_URL` – Public URL of the worker, used when building Replicate webhook URLs.
 - `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret (only when using Replicate). When set, the
   worker verifies all Replicate webhook callbacks using HMAC (recommended).
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
+- `JOB_ALERT_MIN_SCANNED` – Optional minimum parsed rows before a completed cron run is considered suspicious. Defaults to `1`.
+- `JOB_ALERT_STALE_HOURS` – Optional maximum age of the latest inserted death row before a completed cron run sends a stale-data alert. Defaults to `24`.
+- `JOB_ALERT_COOLDOWN_MINUTES` – Optional duplicate-alert cooldown per alert type. Defaults to `360`.
 - X (Twitter) OAuth 2.0 (PKCE) configuration:
   - `X_CLIENT_ID` – OAuth 2.0 client ID for your X App
   - `X_CLIENT_SECRET` – (optional) client secret; included when present
@@ -41,11 +45,13 @@ The worker expects the following bindings and environment variables:
 When connected once via OAuth 2.0, the worker stores and refreshes tokens and posts via `POST /2/tweets` with a Bearer token.
 
 Store secrets with Wrangler (once per environment):
+
 ```bash
 wrangler secret put OPENAI_API_KEY
 wrangler secret put OPENAI_WEBHOOK_SECRET     # optional (OpenAI webhooks)
 wrangler secret put REPLICATE_API_TOKEN      # only if using Replicate
 wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put TELEGRAM_ALERT_CHAT_ID   # optional direct ops alerts
 wrangler secret put MANUAL_RUN_SECRET
 wrangler secret put REPLICATE_WEBHOOK_SECRET # optional (Replicate only)
 ```
@@ -70,6 +76,7 @@ npm run deploy
 ```
 
 ## Endpoints
+
 - `POST /run` – Manually trigger the job. Requires `MANUAL_RUN_SECRET`.
   - **Auth:** Send the secret in the `Authorization` header:
     ```
@@ -148,20 +155,35 @@ The `POST /run` endpoint is rate-limited to protect the worker from abuse and ac
 - Logging: Exceed events are logged with IP and window info for operational visibility.
 
 Schema
+
 - The limiter uses a small D1 table `rate_limits` for counters.
 - Apply the migration:
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/002_create_rate_limits.sql
   ```
 
+## Operational Alerts
+
+Scheduled jobs can send direct Telegram alerts when:
+
+- `runJob(...)` throws, including D1 startup/reset errors, Wikipedia fetch failures, or LLM enqueue failures.
+- A completed run parses fewer than `JOB_ALERT_MIN_SCANNED` entries, catching parser/page-shape regressions.
+- A completed run finds the latest inserted death row older than `JOB_ALERT_STALE_HOURS`, catching silent stale-data failures.
+
+Alerts are sent directly to `TELEGRAM_ALERT_CHAT_ID` using the bot token and do not read the subscriber table, so D1 outages can still be reported. Duplicate alerts are throttled with KV using `JOB_ALERT_COOLDOWN_MINUTES`.
+
+To get your Telegram chat ID, send a message to the bot and inspect the webhook payload or query the `subscribers` table after `/subscribe`.
+
 ## Database Schema
 
 The worker stores parsed entries and subscriber/chat state in D1.
 
 - Death entries: `migrations/003_create_deaths.sql`
+
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/003_create_deaths.sql
   ```
+
 - Telegram subscribers: `migrations/001_create_subscribers.sql`
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/001_create_subscribers.sql
@@ -193,6 +215,7 @@ Configure your bot to send updates to the Worker and let users manage subscripti
   - `/commands` – Show the list of available commands.
 
 Notes
+
 - Subscriptions are stored in the D1 table `subscribers` with fields: `id`, `type`, `chat_id`, `enabled`, `created_at` (unique on `(type, chat_id)`).
 - Only `type = 'telegram'` is used currently; the schema allows future channels (SMS, Signal, etc.).
 - Schema is managed outside runtime. A sample migration exists at `migrations/001_create_subscribers.sql`.
@@ -225,6 +248,7 @@ The worker can post each LLM-approved death to X (Twitter) at `x.com/CelebDeathB
 - Length is constrained to 280 characters with t.co URL weighting (23 chars). The body text is truncated with an ellipsis if necessary.
 
 Setup (OAuth 2.0, PKCE)
+
 - In your X developer app, enable OAuth 2.0 user auth with scopes: `tweet.read tweet.write users.read offline.access`.
 - Store secrets (never commit these):
   ```bash
@@ -241,6 +265,7 @@ Setup (OAuth 2.0, PKCE)
   - Verify status: `GET ${BASE_URL}/x/oauth/status` → `{ connected: true, expires_at: <unix> }`.
 
 Security notes
+
 - Access and refresh tokens are encrypted at rest in D1 via AES-256-GCM using `X_ENC_KEY`.
 - Tokens are auto-refreshed as they near expiry; no interactive login is needed after the first connect.
 
@@ -256,6 +281,7 @@ Replicate signs each webhook delivery. This worker verifies signatures to preven
 - Timestamp window: 5 minutes (requests older than this are rejected).
 
 Setup
+
 - Retrieve your signing key from Replicate (associated with your API token):
   ```bash
   curl -s -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
@@ -268,6 +294,7 @@ Setup
   ```
 
 Notes
+
 - Do not append secrets to the webhook URL. This worker no longer uses `?secret=...` for Replicate callbacks; it relies on HMAC verification only.
 - The secret format is `whsec_<base64>`. Only the base64 part is used as the raw HMAC key.
 - The worker uses constant-time comparison and enforces a 5-minute timestamp tolerance to mitigate replay attacks.
