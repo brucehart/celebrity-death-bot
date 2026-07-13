@@ -37,8 +37,11 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 	const predictionId = typeof payload.id === 'string' && payload.id.length <= 200 ? payload.id.trim() : '';
 	if (!predictionId) return new Response('Missing prediction id', { status: 400 });
 	const eventId = `${predictionId}:${status}`;
+	let claimToken: string;
 	try {
-		if (!(await claimWebhookEvent(env, 'replicate', eventId))) return Response.json({ ok: true, duplicate: true });
+		const claimed = await claimWebhookEvent(env, 'replicate', eventId);
+		if (!claimed) return Response.json({ ok: true, duplicate: true });
+		claimToken = claimed;
 	} catch (error) {
 		console.error('Replicate webhook claim failed', error instanceof Error ? error.message : String(error));
 		return new Response('Webhook processing failed', { status: 500 });
@@ -47,13 +50,15 @@ export async function replicateCallback(request: Request, env: Env): Promise<Res
 	try {
 		const joined = coalesceOutput(payload.output).trim();
 		const candidatePaths = extractCandidatePathsFromReplicatePayload(payload);
-		const result = await applyLlmOutput(env, joined, candidatePaths);
-		await completeWebhookEvent(env, 'replicate', eventId);
+		const result = await applyLlmOutput(env, joined, candidatePaths, {
+			beforeSideEffects: () => completeWebhookEvent(env, 'replicate', eventId, claimToken),
+		});
+		await completeWebhookEvent(env, 'replicate', eventId, claimToken);
 		return Response.json({ ok: true, ...result });
 	} catch (error) {
 		console.error('Replicate webhook processing failed', error instanceof Error ? error.message : String(error));
 		try {
-			await failWebhookEvent(env, 'replicate', eventId, error);
+			await failWebhookEvent(env, 'replicate', eventId, claimToken, error);
 		} catch (recordError) {
 			console.error('Replicate webhook failure recording failed', recordError instanceof Error ? recordError.message : String(recordError));
 		}
