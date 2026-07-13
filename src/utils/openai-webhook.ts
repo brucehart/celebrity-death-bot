@@ -1,6 +1,8 @@
 // Utilities to verify OpenAI webhook HMAC signatures (Standard Webhooks spec)
 // Reference: signature over `${id}.${timestamp}.${rawBody}` using HMAC-SHA256
 
+import { secureCompareStrings } from './security.ts';
+
 const DEFAULT_MAX_AGE_SECONDS = 5 * 60; // 5 minutes
 
 function toUint8Array(input: string): Uint8Array {
@@ -74,7 +76,7 @@ export async function verifyOpenAISignatureParts(
 	webhookTimestamp: string | null | undefined,
 	webhookSignatureHeader: string | null | undefined,
 	rawBody: string,
-	maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS
+	maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS,
 ): Promise<boolean> {
 	if (!webhookId || !webhookTimestamp || !webhookSignatureHeader) return false;
 	if (!isTimestampFresh(webhookTimestamp, maxAgeSeconds)) return false;
@@ -82,14 +84,8 @@ export async function verifyOpenAISignatureParts(
 	const computed = await computeOpenAISignature(secret, signedContent);
 	const expected = parseWebhookSignatures(webhookSignatureHeader);
 	if (!expected.length) return false;
-	const computedBytes = toUint8Array(computed);
 	for (const exp of expected) {
-		const expBytes = toUint8Array(exp);
-		if (expBytes.length === computedBytes.length) {
-			let res = 0;
-			for (let i = 0; i < expBytes.length; i++) res |= expBytes[i] ^ computedBytes[i];
-			if (res === 0) return true;
-		}
+		if (await secureCompareStrings(exp, computed)) return true;
 	}
 	return false;
 }
@@ -97,13 +93,13 @@ export async function verifyOpenAISignatureParts(
 export async function verifyOpenAIWebhook(
 	request: Request,
 	secret: string,
-	rawBody?: string,
-	maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS
+	rawBody: string,
+	maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS,
 ): Promise<{ ok: true } | { ok: false; code: number; error: string }> {
 	const id = request.headers.get('webhook-id');
 	const ts = request.headers.get('webhook-timestamp');
 	const sig = request.headers.get('webhook-signature');
-	const body = rawBody ?? (await request.clone().text());
+	const body = rawBody;
 
 	if (!id || !ts || !sig) {
 		return { ok: false, code: 400, error: 'Missing required webhook headers' };

@@ -2,80 +2,90 @@ import type { Env } from '../types.ts';
 import { runJob, runJobForIds, runJobForWikiPaths, runPending } from '../services/job.ts';
 import { getConfig } from '../config.ts';
 import { checkRateLimits } from '../services/rate-limit.ts';
+import { BodyTooLargeError, MAX_ADMIN_FORM_BYTES, readRequestTextBounded } from '../utils/request.ts';
+import { secureCompareStrings } from '../utils/security.ts';
+
+type RunOptions = {
+	ids?: number[];
+	wikiPaths?: string[];
+	retryPending: boolean;
+	pendingLimit?: number;
+	model?: string;
+	provider?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseOptions(value: unknown): RunOptions {
+	const options: RunOptions = { retryPending: false };
+	if (!isRecord(value)) return options;
+
+	const ids = Array.isArray(value.ids) ? value.ids : typeof value.id === 'number' ? [value.id] : [];
+	options.ids = ids
+		.map(Number)
+		.filter((id) => Number.isSafeInteger(id) && id > 0)
+		.slice(0, 100);
+	const paths = Array.isArray(value.wiki_paths) ? value.wiki_paths : typeof value.wiki_path === 'string' ? [value.wiki_path] : [];
+	options.wikiPaths = paths
+		.filter((path): path is string => typeof path === 'string')
+		.map((path) => path.trim())
+		.filter((path) => path.length > 0 && path.length <= 512)
+		.slice(0, 100);
+	options.retryPending = value.retry_pending === true;
+	const parsedLimit = Number(value.pending_limit ?? value.limit);
+	if (Number.isFinite(parsedLimit) && parsedLimit > 0) options.pendingLimit = Math.min(Math.floor(parsedLimit), 400);
+	if (typeof value.model === 'string' && value.model.trim()) options.model = value.model.trim().slice(0, 200);
+	const providerValue = typeof value.provider === 'string' ? value.provider : value.llm_provider;
+	if (typeof providerValue === 'string' && providerValue.trim()) options.provider = providerValue.trim().slice(0, 50);
+	return options;
+}
 
 export async function manualRun(request: Request, env: Env): Promise<Response> {
-  // Apply rate limiting per IP (covers both authorized and unauthorized attempts)
-  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const cfg = getConfig(env);
-  const rl = await checkRateLimits(env, 'run', ip, cfg.rateLimit.run.windows);
-  if (!rl.allowed) {
-    console.warn(`Rate limit exceeded for /run from ${ip}; window=${rl.exceeded!.windowSeconds}s count=${rl.exceeded!.count} limit=${rl.exceeded!.limit}`);
-    return new Response('Too Many Requests', {
-      status: 429,
-      headers: {
-        'Retry-After': String(rl.exceeded!.resetSeconds || 60),
-      },
-    });
-  }
-  // Authorization header is case-insensitive; fetch once and parse optional Bearer prefix
-  const auth = request.headers.get('Authorization') || '';
-  const token = (() => {
-    const maybe = auth.trim();
-    if (!maybe) return '';
-    const m = /^Bearer\s+(.+)$/i.exec(maybe);
-    return m ? m[1].trim() : maybe;
-  })();
-  if (!token || token !== env.MANUAL_RUN_SECRET) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+	const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+	const cfg = getConfig(env);
+	const rateLimit = await checkRateLimits(env, 'run', ip, cfg.rateLimit.run.windows);
+	if (!rateLimit.allowed) {
+		console.warn('Rate limit exceeded for /run', { ip, window: rateLimit.exceeded?.windowSeconds });
+		return new Response('Too Many Requests', {
+			status: 429,
+			headers: { 'Retry-After': String(rateLimit.exceeded?.resetSeconds || 60) },
+		});
+	}
 
-  try {
-	// Optional: allow targeted reprocessing of specific D1 ids/wiki_paths or retry pending batches.
-	// Body may be JSON with { ids: number[] }, { wiki_paths: string[] }, { retry_pending: true }, plus optional { model, provider }.
-	let ids: number[] | undefined;
-	let wikiPaths: string[] | undefined;
-	let retryPending = false;
-	let pendingLimit: number | undefined;
-	let model: string | undefined;
-	let provider: string | undefined;
-	const ct = (request.headers.get('Content-Type') || '').toLowerCase();
-	if (ct.includes('application/json')) {
+	if (!env.MANUAL_RUN_SECRET) return new Response('Manual run is not configured', { status: 503 });
+	const rawAuthorization = request.headers.get('Authorization')?.trim() || '';
+	const bearer = /^Bearer\s+(.+)$/i.exec(rawAuthorization);
+	const token = (bearer?.[1] || '').trim();
+	if (!token || !(await secureCompareStrings(token, env.MANUAL_RUN_SECRET))) return new Response('Unauthorized', { status: 401 });
+
+	let options: RunOptions = { retryPending: false };
+	if ((request.headers.get('Content-Type') || '').toLowerCase().includes('application/json')) {
 		try {
-			const body = (await request.json()) as any;
-			if (Array.isArray(body?.ids)) ids = body.ids as number[];
-			if (typeof body?.id === 'number') ids = [body.id];
-			if (Array.isArray(body?.wiki_paths)) wikiPaths = (body.wiki_paths as any[]).map(String);
-			if (typeof body?.wiki_path === 'string') wikiPaths = [String(body.wiki_path)];
-			if (body?.retry_pending === true) retryPending = true;
-			const maybeLimit = body?.pending_limit ?? body?.limit;
-			const parsedLimit = Number(maybeLimit);
-			if (Number.isFinite(parsedLimit) && parsedLimit > 0) pendingLimit = parsedLimit;
-			if (typeof body?.model === 'string' && body.model.trim()) model = body.model.trim();
-			if (typeof body?.provider === 'string' && body.provider.trim()) provider = body.provider.trim();
-			if (typeof body?.llm_provider === 'string' && body.llm_provider.trim()) provider = body.llm_provider.trim();
-		} catch {
-			// Ignore body parse errors; fall back to full run
+			options = parseOptions(JSON.parse(await readRequestTextBounded(request, MAX_ADMIN_FORM_BYTES)));
+		} catch (error) {
+			return new Response(error instanceof BodyTooLargeError ? 'Request too large' : 'Invalid JSON', {
+				status: error instanceof BodyTooLargeError ? 413 : 400,
+			});
 		}
 	}
 
-	if (ids && ids.length) {
-		const res = await runJobForIds(env, ids, { model, provider });
-		return Response.json({ ok: true, mode: 'ids', ...res });
+	try {
+		if (options.ids?.length) return Response.json({ ok: true, mode: 'ids', ...(await runJobForIds(env, options.ids, options)) });
+		if (options.wikiPaths?.length) {
+			return Response.json({ ok: true, mode: 'wiki_paths', ...(await runJobForWikiPaths(env, options.wikiPaths, options)) });
+		}
+		if (options.retryPending) {
+			return Response.json({
+				ok: true,
+				mode: 'retry_pending',
+				...(await runPending(env, { ...options, limit: options.pendingLimit, drain: options.pendingLimit == null })),
+			});
+		}
+		return Response.json({ ok: true, mode: 'full', ...(await runJob(env, options)) });
+	} catch (error) {
+		console.error('Manual run failed', error instanceof Error ? error.message : String(error));
+		return Response.json({ ok: false, error: 'Job failed' }, { status: 500 });
 	}
-
-	if (wikiPaths && wikiPaths.length) {
-		const res = await runJobForWikiPaths(env, wikiPaths, { model, provider });
-		return Response.json({ ok: true, mode: 'wiki_paths', ...res });
-	}
-
-	if (retryPending) {
-		const res = await runPending(env, { limit: pendingLimit, model, provider, drain: pendingLimit == null });
-		return Response.json({ ok: true, mode: 'retry_pending', ...res });
-	}
-
-	const res = await runJob(env, { model, provider });
-	return Response.json({ ok: true, mode: 'full', ...res });
-  } catch (e: any) {
-    return Response.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
-  }
 }

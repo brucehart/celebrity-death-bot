@@ -1,19 +1,14 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
+import { MAX_PROVIDER_RESPONSE_BYTES, readResponseTextBounded } from '../utils/request.ts';
 
 export const DEFAULT_REPLICATE_MODEL = 'openai/gpt-5-mini';
 
 export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?: string[]): string {
 	const lines = newEntries.map((e) => {
-		const parts = [
-			e.name,
-			typeof e.age === 'number' ? String(e.age) : '',
-			e.description ?? '',
-			e.cause ?? '',
-			e.wiki_path,
-		].map((x) =>
-			x.trim()
+		const parts = [e.name, typeof e.age === 'number' ? String(e.age) : '', e.description ?? '', e.cause ?? '', e.wiki_path].map((x) =>
+			x.trim(),
 		);
 		return parts.filter(Boolean).join(', ');
 	});
@@ -37,7 +32,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
 					'**Important override:** The following `wiki_path` IDs MUST be included in the output regardless of typical notability criteria. If they appear in the input, include them with a concise description and cause of death: ',
 					'',
 					forceNote.join(', '),
-			  ]
+				]
 			: []),
 		'',
 		'**Output format:** JSON object with fields:',
@@ -58,6 +53,7 @@ export function buildReplicatePrompt(newEntries: DeathEntry[], forcedWikiPaths?:
 }
 
 export async function callReplicate(env: Env, prompt: string, opts?: { forcedPaths?: string[]; model?: string }) {
+	if (!env.REPLICATE_WEBHOOK_SECRET) throw new Error('REPLICATE_WEBHOOK_SECRET is required when using Replicate');
 	const cfg = getConfig(env);
 	const model = (opts?.model || DEFAULT_REPLICATE_MODEL).trim() || DEFAULT_REPLICATE_MODEL;
 	// Some hosted models (e.g., OpenAI GPT-5 endpoints) reject unknown top-level fields such as `metadata`.
@@ -96,10 +92,7 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 		};
 	}
 	// Attach minimal metadata to identify the batch candidates by wiki_path when allowed.
-	if (
-		allowMetadata &&
-		(prompt || '').includes('Input (each line:')
-	) {
+	if (allowMetadata && (prompt || '').includes('Input (each line:')) {
 		// Best-effort extraction of wiki_paths from prompt for metadata redundancy.
 		const m = /Input \(each line:[\s\S]*?----\n([\s\S]*?)\n----/m.exec(prompt);
 		if (m && m[1]) {
@@ -120,18 +113,21 @@ export async function callReplicate(env: Env, prompt: string, opts?: { forcedPat
 		};
 	}
 
-	const res = await fetchWithRetry(`https://api.replicate.com/v1/models/${model}/predictions`, {
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${env.REPLICATE_API_TOKEN}`,
-			'Content-Type': 'application/json',
+	const res = await fetchWithRetry(
+		`https://api.replicate.com/v1/models/${model}/predictions`,
+		{
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${env.REPLICATE_API_TOKEN}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify(body),
 		},
-		body: JSON.stringify(body),
-	}, { retries: 1, timeoutMs: cfg.limits.fetchTimeoutMs });
+		{ retries: 1, timeoutMs: cfg.limits.fetchTimeoutMs },
+	);
 
 	if (!res.ok) {
-		const t = await res.text();
-		throw new Error(`Replicate error ${res.status}: ${t}`);
+		throw new Error(`Replicate request failed (${res.status})`);
 	}
-	return res.json();
+	return JSON.parse(await readResponseTextBounded(res, MAX_PROVIDER_RESPONSE_BYTES)) as unknown;
 }

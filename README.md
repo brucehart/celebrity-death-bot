@@ -23,15 +23,19 @@ The worker expects the following bindings and environment variables:
 
 - `DB` – D1 database binding used to persist entries.
 - `OPENAI_API_KEY` – OpenAI API key used for Responses API calls (default provider).
-- `OPENAI_WEBHOOK_SECRET` – OpenAI webhook signing secret (optional; enables background Responses + `/openai/webhook` processing).
+- `OPENAI_WEBHOOK_SECRET` – OpenAI webhook signing secret (optional; enables background Responses + `/openai/webhook` processing). The webhook route returns `503` when it is absent.
 - `LLM_PROVIDER` – Optional provider override: `openai` (default) or `replicate`.
 - `REPLICATE_API_TOKEN` – API token for Replicate (required only when `LLM_PROVIDER=replicate`).
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token used for sending messages.
 - `TELEGRAM_ALERT_CHAT_ID` – Optional direct Telegram chat ID(s) for operational job alerts. Comma/space/semicolon delimited. Falls back to `TELEGRAM_CHAT_IDS` when present.
 - `BASE_URL` – Public URL of the worker, used when building Replicate webhook URLs.
-- `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret (only when using Replicate). When set, the
-  worker verifies all Replicate webhook callbacks using HMAC (recommended).
+- `REPLICATE_WEBHOOK_SECRET` – Replicate webhook signing secret. Required when using Replicate; unsigned callbacks are never accepted.
 - `MANUAL_RUN_SECRET` – Secret token required to call the manual `/run` endpoint.
+- `TELEGRAM_WEBHOOK_SECRET` – Required when configuring the Telegram webhook; the route fails closed when it is absent.
+- `ALLOWED_GOOGLE_ACCOUNTS` – Comma/space/semicolon-delimited administrator email allowlist. Store it as a secret rather than a committed Wrangler variable.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` – Google OpenID Connect credentials for the administrator dashboard.
+- `SESSION_HMAC_KEY` – At least 32 random bytes used to sign the 12-hour administrator session and OAuth state.
+- `OAUTH_CALLBACK_URL` – Canonical Google callback URL, normally `https://celebritydeathbot.com/oauth/callback`.
 - `JOB_ALERT_MIN_SCANNED` – Optional minimum parsed rows before a completed cron run is considered suspicious. Defaults to `1`.
 - `JOB_ALERT_STALE_HOURS` – Optional maximum age of the latest inserted death row before a completed cron run sends a stale-data alert. Defaults to `24`.
 - `JOB_ALERT_COOLDOWN_MINUTES` – Optional duplicate-alert cooldown per alert type. Defaults to `360`.
@@ -51,9 +55,14 @@ wrangler secret put OPENAI_API_KEY
 wrangler secret put OPENAI_WEBHOOK_SECRET     # optional (OpenAI webhooks)
 wrangler secret put REPLICATE_API_TOKEN      # only if using Replicate
 wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put TELEGRAM_WEBHOOK_SECRET  # required when using Telegram commands
 wrangler secret put TELEGRAM_ALERT_CHAT_ID   # optional direct ops alerts
 wrangler secret put MANUAL_RUN_SECRET
-wrangler secret put REPLICATE_WEBHOOK_SECRET # optional (Replicate only)
+wrangler secret put REPLICATE_WEBHOOK_SECRET # required for Replicate
+wrangler secret put ALLOWED_GOOGLE_ACCOUNTS
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put SESSION_HMAC_KEY
 ```
 
 ### Cron schedule
@@ -98,6 +107,7 @@ npm run deploy
     ```
     Notes: The worker also avoids marking these IDs as `llm_result = 'no'` if the model unexpectedly omits them; they'll remain pending so you can retry.
   - **Targeted reprocess by wiki_path(s):** If you prefer specifying the Wikipedia ID(s) instead of database IDs, send `wiki_paths` or a single `wiki_path`. Accepts raw IDs like `Jane_Doe`, full article paths like `/wiki/Jane_Doe`, or edit/redlink URLs like `/w/index.php?title=Jane_Doe&action=edit&redlink=1`.
+
     ```bash
     # Single
     curl -X POST \
@@ -113,7 +123,9 @@ npm run deploy
       -d '{"wiki_paths":["Jane_Doe","/wiki/John_Smith","/w/index.php?title=Greg_O%2727Connell&action=edit&redlink=1"]}' \
       https://<your-worker>/run
     ```
+
     Behavior mirrors the ID-based mode: These paths are treated as MUST INCLUDE in the LLM prompt and won’t be auto-marked `no` if omitted.
+
   - **Retry pending LLM batches:** Re-evaluate rows stuck with `llm_result = 'pending'` (useful after LLM outages). For OpenAI (default), omit `pending_limit` to drain all pending rows; add `pending_limit` to cap volume. For Replicate, the default remains 120 rows per call, split into batches of 30 for safer prompts.
     ```bash
     curl -X POST \
@@ -138,10 +150,10 @@ npm run deploy
       -d '{"retry_pending":true,"provider":"replicate","model":"google/gemini-3-pro"}' \
       https://<your-worker>/run
     ```
-- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (only when using `LLM_PROVIDER=replicate`; verified via HMAC if `REPLICATE_WEBHOOK_SECRET` is set).
-  - Manual override: send the same `Authorization: Bearer <MANUAL_RUN_SECRET>` header that `/run` uses to bypass the HMAC requirement. Useful when you need to craft a callback payload to force a “yes” decision.
+
+- `POST /replicate/callback` – Endpoint for Replicate webhook callbacks (only when using `LLM_PROVIDER=replicate`; always verified via HMAC).
 - `POST /openai/webhook` – Endpoint for OpenAI webhook callbacks (enable by setting `OPENAI_WEBHOOK_SECRET` and configuring the webhook in the OpenAI dashboard for `response.completed`, `response.failed`, and `response.cancelled`).
-- `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. If `TELEGRAM_WEBHOOK_SECRET` is set, Telegram must send header `X-Telegram-Bot-Api-Secret-Token` with the same secret.
+- `POST /telegram/webhook` – Telegram webhook endpoint for subscription commands. `TELEGRAM_WEBHOOK_SECRET` is mandatory and Telegram must send it in `X-Telegram-Bot-Api-Secret-Token`.
 - `GET /health` – Simple health check returning `ok`.
 
 ## Rate Limiting
@@ -185,8 +197,15 @@ The worker stores parsed entries and subscriber/chat state in D1.
   ```
 
 - Telegram subscribers: `migrations/001_create_subscribers.sql`
+
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/001_create_subscribers.sql
+  ```
+
+- Security hardening (one-time X OAuth state ownership and webhook replay ledger): `migrations/006_security_hardening.sql`. Apply migrations before deploying this code so webhook processing never runs against the old schema:
+
+  ```bash
+  wrangler d1 migrations apply celebrity-death-bot --remote
   ```
 
 ## Telegram Webhook & Commands
@@ -194,6 +213,7 @@ The worker stores parsed entries and subscriber/chat state in D1.
 Configure your bot to send updates to the Worker and let users manage subscriptions via chat.
 
 - Set the Telegram webhook URL and provide a secret token that Telegram will send in header `X-Telegram-Bot-Api-Secret-Token` with every webhook request:
+
   ```bash
   export BASE_URL=<your-worker-url>
   export TELEGRAM_BOT_TOKEN=<your-token>
@@ -208,6 +228,7 @@ Configure your bot to send updates to the Worker and let users manage subscripti
     -d url="${BASE_URL}/telegram/webhook" \
     -d secret_token="${TELEGRAM_WEBHOOK_SECRET}"
   ```
+
 - Supported commands (send in a DM to your bot):
   - `/start` or `/subscribe` – Subscribe this chat to alerts.
   - `/stop` or `/unsubscribe` – Unsubscribe this chat (we delete your chat ID).
@@ -259,14 +280,14 @@ Setup (OAuth 2.0, PKCE)
 - Apply the migration for token storage:
   ```bash
   wrangler d1 execute celebrity-death-bot --file=./migrations/004_create_x_oauth.sql
+  wrangler d1 execute celebrity-death-bot --file=./migrations/006_security_hardening.sql
   ```
-- Connect the bot account by visiting:
-  - `GET ${BASE_URL}/x/oauth/start` → authorizes via X; callback goes to `${BASE_URL}/x/oauth/callback`.
-  - Verify status: `GET ${BASE_URL}/x/oauth/status` → `{ connected: true, expires_at: <unix> }`.
+- Sign into `/llm-debug`, choose **Connect X**, and confirm the CSRF-protected authorization step. The callback and status endpoints require the same administrator session.
 
 Security notes
 
 - Access and refresh tokens are encrypted at rest in D1 via AES-256-GCM using `X_ENC_KEY`.
+- PKCE state is one-time, expires after ten minutes, and is bound to the administrator email and session that initiated it.
 - Tokens are auto-refreshed as they near expiry; no interactive login is needed after the first connect.
 
 ## Replicate Webhook Signing (HMAC)
@@ -298,6 +319,7 @@ Notes
 - Do not append secrets to the webhook URL. This worker no longer uses `?secret=...` for Replicate callbacks; it relies on HMAC verification only.
 - The secret format is `whsec_<base64>`. Only the base64 part is used as the raw HMAC key.
 - The worker uses constant-time comparison and enforces a 5-minute timestamp tolerance to mitigate replay attacks.
+- Successfully authenticated webhook deliveries are claimed in D1 before processing, so provider retries cannot send duplicate notifications.
 
 ## OpenAI Webhooks
 
@@ -309,14 +331,18 @@ When `OPENAI_WEBHOOK_SECRET` is set, OpenAI requests are sent in background mode
 
 ## Testing
 
-This repo uses Node’s built-in `node:test` for a few focused unit tests around webhook verification, Telegram HTML sanitization, Wikipedia parsing, and JSON extraction helpers.
+This repo uses Node’s built-in `node:test` for focused pure/unit tests and Cloudflare’s Vitest integration for route tests inside the Workers runtime.
 
 - Run all tests:
   ```bash
   npm test
   ```
 
-If you prefer Vitest, you can add it later; place tests beside code as `*.test.ts`.
+`npm test` runs both suites. Worker integration tests live in `tests/worker/` and use `vitest.config.ts`, which loads the production Wrangler compatibility settings and bindings.
+
+## Production exposure
+
+`workers_dev` and preview URLs are disabled in `wrangler.jsonc`; production traffic is served only on `https://celebritydeathbot.com`. All responses receive HSTS, clickjacking, MIME-sniffing, referrer, and permissions-policy headers. The administrator dashboard additionally uses a nonce-based content security policy.
 
 ## Release Notes
 

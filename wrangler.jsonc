@@ -3,62 +3,58 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "celebrity-death-bot",
-  "main": "src/index.ts",
-  "compatibility_date": "2025-08-13",
-  "workers_dev": true,
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "celebrity-death-bot",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-13",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
 
-  "routes": [
-    { "pattern": "celebritydeathbot.com/*", "zone_name": "celebritydeathbot.com" },
-    { "pattern": "*.celebritydeathbot.com/*", "zone_name": "celebritydeathbot.com" }
-  ],
+	"routes": [{ "pattern": "celebritydeathbot.com/*", "zone_name": "celebritydeathbot.com" }],
 
-  // Run hourly at minute 5 (adjust as needed)
-  "triggers": { "crons": ["5-59/15 * * * *"] },
+	// Run hourly at minute 5 (adjust as needed)
+	"triggers": { "crons": ["5-59/15 * * * *"] },
 
-  // D1 binding
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "celebrity-death-bot",
-      "database_id": "4beed916-ec8a-4517-b659-8c1f3e0e0f3c"
-    }
-  ],
+	// D1 binding
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "celebrity-death-bot",
+			"database_id": "4beed916-ec8a-4517-b659-8c1f3e0e0f3c",
+		},
+	],
 
-  "kv_namespaces": [
-    {
-      "binding": "celebrity_death_bot_kv",
-      // Production KV namespace ID
-      "id": "ca8f1e42390e42bba974529aa399fea7",
-      // IMPORTANT: Use a separate preview_id for local dev to avoid writing to prod.
-      // Replace with your dev KV namespace ID.
-      //"preview_id": "ca8f1e42390e42bba974529aa399fea7"
-    }
-  ],
+	"kv_namespaces": [
+		{
+			"binding": "celebrity_death_bot_kv",
+			// Production KV namespace ID
+			"id": "ca8f1e42390e42bba974529aa399fea7",
+			// IMPORTANT: Use a separate preview_id for local dev to avoid writing to prod.
+			// Replace with your dev KV namespace ID.
+			//"preview_id": "ca8f1e42390e42bba974529aa399fea7"
+		},
+	],
 
-  /**
-   * Environment Variables (non-secrets)   
-   * BASE_URL is the public URL for this Worker, used by the Replicate webhook.
-   */
-  "vars": {    
-    "BASE_URL": "https://celebrity-death-bot.bruce-hart.workers.dev",
-    "X_PROFILE_URL": "https://x.com/CelebDeathBot",
-    "TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot",
-    // Automatic X posting is disabled unless this is explicitly true.
-    "POST_TO_X": "true",
-    // Automatic X posts omit Wikipedia links unless this is explicitly true.
-    "X_POST_INCLUDE_WIKIPEDIA_LINK": "false",
-    // Include previous month when current NY day is <= LOOKBACK_DAYS
-    "LOOKBACK_DAYS": "15",
-    // Comma/space/semicolon delimited list of permitted Google account emails
-    "ALLOWED_GOOGLE_ACCOUNTS": "bruce.hart@gmail.com",
-    "OAUTH_CALLBACK_URL": "https://celebritydeathbot.com/oauth/callback"
-  },
+	/**
+	 * Environment Variables (non-secrets)
+	 * BASE_URL is the public URL for this Worker, used by the Replicate webhook.
+	 */
+	"vars": {
+		"BASE_URL": "https://celebritydeathbot.com",
+		"X_PROFILE_URL": "https://x.com/CelebDeathBot",
+		"TELEGRAM_BOT_URL": "https://t.me/CelebrityDeathBot",
+		// Automatic X posting is disabled unless this is explicitly true.
+		"POST_TO_X": "true",
+		// Automatic X posts omit Wikipedia links unless this is explicitly true.
+		"X_POST_INCLUDE_WIKIPEDIA_LINK": "false",
+		// Include previous month when current NY day is <= LOOKBACK_DAYS
+		"LOOKBACK_DAYS": "15",
+		"OAUTH_CALLBACK_URL": "https://celebritydeathbot.com/oauth/callback",
+	},
 
-  // Optional but nice for debugging in the dashboard
-  "observability": { "enabled": true },
+	// Optional but nice for debugging in the dashboard
+	"observability": { "enabled": true },
 
-  "assets": { "directory": "./public", "binding": "ASSETS" }
-
+	"assets": { "directory": "./public", "binding": "ASSETS" },
 }
