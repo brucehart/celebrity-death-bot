@@ -12,7 +12,13 @@ const canonicalRow = {
 	cause: 'canonical cause',
 };
 
-function makeEnv({ failSubscriberRead = false } = {}) {
+const rejectedRow = {
+	...canonicalRow,
+	name: 'Rejected Person',
+	wiki_path: 'Rejected_Person',
+};
+
+function makeEnv({ deathRows = [canonicalRow], failSubscriberRead = false } = {}) {
 	const writes = [];
 	const reads = [];
 	const DB = {
@@ -22,7 +28,7 @@ function makeEnv({ failSubscriberRead = false } = {}) {
 					return {
 						async all() {
 							reads.push(sql);
-							if (sql.includes('FROM deaths')) return { results: [canonicalRow] };
+							if (sql.includes('FROM deaths')) return { results: deathRows };
 							if (sql.includes('FROM subscribers')) {
 								if (failSubscriberRead) throw new Error('notification lookup failed');
 								return { results: [] };
@@ -36,6 +42,9 @@ function makeEnv({ failSubscriberRead = false } = {}) {
 					};
 				},
 			};
+		},
+		async batch(statements) {
+			return Promise.all(statements.map((statement) => statement.run()));
 		},
 	};
 	return { env: { DB }, reads, writes };
@@ -107,6 +116,29 @@ test('synchronous send failures leave selected deaths pending for retry', async 
 		reads.some((sql) => sql.includes('FROM subscribers')),
 		true,
 	);
+	assert.equal(
+		writes.some((write) => write.sql.includes("llm_result = 'yes'")),
+		false,
+	);
+});
+
+test('synchronous send failures still persist independent rejections', async () => {
+	const { env, writes } = makeEnv({ deathRows: [canonicalRow, rejectedRow], failSubscriberRead: true });
+	await assert.rejects(
+		() =>
+			applyLlmOutput(
+				env,
+				JSON.stringify({
+					selected: [{ wiki_path: 'Trusted_Person' }],
+					rejected: [{ wiki_path: 'Rejected_Person', reason: 'Not notable' }],
+				}),
+				['Trusted_Person', 'Rejected_Person'],
+			),
+		/notification lookup failed/,
+	);
+	const rejectionUpdate = writes.find((write) => write.sql.includes("llm_result = 'no'"));
+	assert.ok(rejectionUpdate);
+	assert.deepEqual(rejectionUpdate.values, ['Not notable', 'Rejected_Person']);
 	assert.equal(
 		writes.some((write) => write.sql.includes("llm_result = 'yes'")),
 		false,

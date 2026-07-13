@@ -220,6 +220,9 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 		for (const item of rejectedItems) if (!selectedSet.has(item.wiki_path)) rejectedByPath.set(item.wiki_path, item);
 		filteredRejections = Array.from(rejectedByPath.values());
 	}
+	// Rejections have no external side effect and must not depend on whether a
+	// selected-row notification succeeds.
+	if (filteredRejections.length) await markDeathsAsNo(env, filteredRejections);
 
 	let notified = 0;
 	if (options.beforeSideEffects) {
@@ -229,7 +232,6 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 		for (const row of selectedRows) {
 			await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
 		}
-		if (filteredRejections.length) await markDeathsAsNo(env, filteredRejections);
 		if (selectedRows.length) await options.beforeSideEffects();
 		for (const row of selectedRows) {
 			await notifySelectedRow(env, row);
@@ -243,7 +245,6 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 			notified++;
 			await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
 		}
-		if (filteredRejections.length) await markDeathsAsNo(env, filteredRejections);
 	}
 
 	return { notified, rejected: filteredRejections.length, errored: 0 } as const;
