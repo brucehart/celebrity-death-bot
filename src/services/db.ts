@@ -178,26 +178,41 @@ export async function markDeathsAsError(env: Env, wikiPaths: string[]) {
 }
 
 export type WebhookProvider = 'replicate' | 'openai' | 'telegram';
+type DatabaseEnv = Pick<Env, 'DB'>;
 
 /**
  * Atomically claims a provider delivery. A false result means the delivery was
- * already seen and must not perform side effects again.
+ * completed or is still being processed and must not perform side effects
+ * again. Failed deliveries are immediately retryable, while processing claims
+ * are reclaimable after 15 minutes so a terminated Worker cannot block the
+ * provider retry forever.
  */
-export async function claimWebhookEvent(env: Env, provider: WebhookProvider, eventId: string): Promise<boolean> {
-	const result = await withD1Retry(
+export async function claimWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string): Promise<boolean> {
+	const claimed = await withD1Retry(
 		() =>
 			env.DB.prepare(
-				`INSERT OR IGNORE INTO processed_webhooks(provider, event_id, status, created_at)
-				 VALUES(?1, ?2, 'processing', CURRENT_TIMESTAMP)`,
+				`INSERT INTO processed_webhooks(provider, event_id, status, created_at)
+				 VALUES(?1, ?2, 'processing', CURRENT_TIMESTAMP)
+				 ON CONFLICT(provider, event_id) DO UPDATE SET
+				   status = 'processing',
+				   error = NULL,
+				   created_at = CURRENT_TIMESTAMP,
+				   completed_at = NULL
+				 WHERE processed_webhooks.status = 'failed'
+				    OR (
+				      processed_webhooks.status = 'processing'
+				      AND processed_webhooks.created_at < datetime('now', '-15 minutes')
+				    )
+				 RETURNING 1 AS claimed`,
 			)
 				.bind(provider, eventId)
-				.run(),
+				.first<{ claimed: number }>(),
 		'claimWebhookEvent',
 	);
-	return Number(result.meta.changes || 0) === 1;
+	return claimed?.claimed === 1;
 }
 
-export async function completeWebhookEvent(env: Env, provider: WebhookProvider, eventId: string): Promise<void> {
+export async function completeWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string): Promise<void> {
 	await withD1Retry(
 		() =>
 			env.DB.prepare(
@@ -211,7 +226,7 @@ export async function completeWebhookEvent(env: Env, provider: WebhookProvider, 
 	);
 }
 
-export async function failWebhookEvent(env: Env, provider: WebhookProvider, eventId: string, error: unknown): Promise<void> {
+export async function failWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string, error: unknown): Promise<void> {
 	const message = errorMessage(error).replace(/\s+/g, ' ').trim().slice(0, 500) || 'Unknown error';
 	await withD1Retry(
 		() =>
@@ -226,7 +241,7 @@ export async function failWebhookEvent(env: Env, provider: WebhookProvider, even
 	);
 }
 
-export async function pruneWebhookEvents(env: Env): Promise<void> {
+export async function pruneWebhookEvents(env: DatabaseEnv): Promise<void> {
 	await withD1Retry(
 		() =>
 			env.DB.prepare(

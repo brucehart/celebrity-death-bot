@@ -10,6 +10,9 @@ const makeEnv = (secret) => ({
 			bind() {
 				return this;
 			},
+			async first() {
+				return { claimed: 1 };
+			},
 			async run() {
 				return { meta: { changes: 1 } };
 			},
@@ -68,12 +71,12 @@ test('replayed update IDs are acknowledged without processing twice', async () =
 				bind() {
 					return this;
 				},
+				async first() {
+					if (!sql.includes('INSERT INTO processed_webhooks') || claimed) return null;
+					claimed = true;
+					return { claimed: 1 };
+				},
 				async run() {
-					if (sql.includes('INSERT OR IGNORE')) {
-						const changes = claimed ? 0 : 1;
-						claimed = true;
-						return { meta: { changes } };
-					}
 					return { meta: { changes: 1 } };
 				},
 			};
