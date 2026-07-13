@@ -12,7 +12,7 @@ const canonicalRow = {
 	cause: 'canonical cause',
 };
 
-function makeEnv() {
+function makeEnv({ failSubscriberRead = false } = {}) {
 	const writes = [];
 	const reads = [];
 	const DB = {
@@ -23,7 +23,10 @@ function makeEnv() {
 						async all() {
 							reads.push(sql);
 							if (sql.includes('FROM deaths')) return { results: [canonicalRow] };
-							if (sql.includes('FROM subscribers')) return { results: [] };
+							if (sql.includes('FROM subscribers')) {
+								if (failSubscriberRead) throw new Error('notification lookup failed');
+								return { results: [] };
+							}
 							return { results: [] };
 						},
 						async run() {
@@ -90,6 +93,22 @@ test('selected notifications do not start until the side-effect fence succeeds',
 	);
 	assert.equal(
 		reads.some((sql) => sql.includes('FROM subscribers')),
+		false,
+	);
+});
+
+test('synchronous send failures leave selected deaths pending for retry', async () => {
+	const { env, reads, writes } = makeEnv({ failSubscriberRead: true });
+	await assert.rejects(
+		() => applyLlmOutput(env, JSON.stringify({ selected: [{ wiki_path: 'Trusted_Person' }], rejected: [] }), ['Trusted_Person']),
+		/notification lookup failed/,
+	);
+	assert.equal(
+		reads.some((sql) => sql.includes('FROM subscribers')),
+		true,
+	);
+	assert.equal(
+		writes.some((write) => write.sql.includes("llm_result = 'yes'")),
 		false,
 	);
 });

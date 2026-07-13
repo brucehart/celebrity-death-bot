@@ -154,6 +154,13 @@ export function extractCandidatePathsFromReplicatePayload(payload: any): string[
 	return extractWikiPathsFromPrompt(prompt);
 }
 
+async function notifySelectedRow(env: Env, row: DeathEntry): Promise<void> {
+	const msg = buildTelegramMessage(row);
+	await notifyTelegram(env, msg);
+	const xText = buildXStatus(row, { includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) });
+	await postToXIfConfigured(env, xText);
+}
+
 export async function applyLlmOutput(env: Env, outputText: string, candidatePaths: string[], options: ApplyLlmOutputOptions = {}) {
 	const candidates = Array.from(
 		new Set(
@@ -206,33 +213,38 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 
 	const selectedPaths = Array.from(new Set(selectedItems.map((item) => readWikiPath(item, candidateMap)).filter(Boolean)));
 	const selectedRows = selectedPaths.map((wikiPath) => rowsByPath.get(wikiPath)).filter((row): row is DeathEntry => Boolean(row));
-	for (const row of selectedRows) {
-		await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
-	}
-
-	let rejected = 0;
+	let filteredRejections: Rejection[] = [];
 	if (rejectedItems.length) {
 		const selectedSet = new Set(selectedPaths);
 		const rejectedByPath = new Map<string, Rejection>();
 		for (const item of rejectedItems) if (!selectedSet.has(item.wiki_path)) rejectedByPath.set(item.wiki_path, item);
-		const filtered = Array.from(rejectedByPath.values());
-		await markDeathsAsNo(env, filtered);
-		rejected = filtered.length;
+		filteredRejections = Array.from(rejectedByPath.values());
 	}
-
-	// Persist every retryable D1 change before fencing the event as complete.
-	// No database operation may follow an external notification: if a send has
-	// an ambiguous outcome, the completed ledger row prevents a duplicate retry.
-	if (selectedRows.length) await options.beforeSideEffects?.();
 
 	let notified = 0;
-	for (const row of selectedRows) {
-		const msg = buildTelegramMessage(row);
-		await notifyTelegram(env, msg);
-		const xText = buildXStatus(row, { includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) });
-		await postToXIfConfigured(env, xText);
-		notified++;
+	if (options.beforeSideEffects) {
+		// Webhook deliveries persist every retryable D1 change before fencing the
+		// event. No database operation may follow an external notification: if a
+		// send has an ambiguous outcome, the completed ledger prevents a duplicate.
+		for (const row of selectedRows) {
+			await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
+		}
+		if (filteredRejections.length) await markDeathsAsNo(env, filteredRejections);
+		if (selectedRows.length) await options.beforeSideEffects();
+		for (const row of selectedRows) {
+			await notifySelectedRow(env, row);
+			notified++;
+		}
+	} else {
+		// Synchronous evaluations have no replay ledger. Keep a selected row
+		// pending until its sends finish so a transient failure remains retryable.
+		for (const row of selectedRows) {
+			await notifySelectedRow(env, row);
+			notified++;
+			await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
+		}
+		if (filteredRejections.length) await markDeathsAsNo(env, filteredRejections);
 	}
 
-	return { notified, rejected, errored: 0 } as const;
+	return { notified, rejected: filteredRejections.length, errored: 0 } as const;
 }
