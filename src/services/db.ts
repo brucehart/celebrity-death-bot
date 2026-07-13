@@ -177,6 +177,70 @@ export async function markDeathsAsError(env: Env, wikiPaths: string[]) {
 	}
 }
 
+export type WebhookProvider = 'replicate' | 'openai' | 'telegram';
+
+/**
+ * Atomically claims a provider delivery. A false result means the delivery was
+ * already seen and must not perform side effects again.
+ */
+export async function claimWebhookEvent(env: Env, provider: WebhookProvider, eventId: string): Promise<boolean> {
+	const result = await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`INSERT OR IGNORE INTO processed_webhooks(provider, event_id, status, created_at)
+				 VALUES(?1, ?2, 'processing', CURRENT_TIMESTAMP)`,
+			)
+				.bind(provider, eventId)
+				.run(),
+		'claimWebhookEvent',
+	);
+	return Number(result.meta.changes || 0) === 1;
+}
+
+export async function completeWebhookEvent(env: Env, provider: WebhookProvider, eventId: string): Promise<void> {
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`UPDATE processed_webhooks
+				    SET status = 'completed', error = NULL, completed_at = CURRENT_TIMESTAMP
+				  WHERE provider = ?1 AND event_id = ?2`,
+			)
+				.bind(provider, eventId)
+				.run(),
+		'completeWebhookEvent',
+	);
+}
+
+export async function failWebhookEvent(env: Env, provider: WebhookProvider, eventId: string, error: unknown): Promise<void> {
+	const message = errorMessage(error).replace(/\s+/g, ' ').trim().slice(0, 500) || 'Unknown error';
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`UPDATE processed_webhooks
+				    SET status = 'failed', error = ?3, completed_at = CURRENT_TIMESTAMP
+				  WHERE provider = ?1 AND event_id = ?2`,
+			)
+				.bind(provider, eventId, message)
+				.run(),
+		'failWebhookEvent',
+	);
+}
+
+export async function pruneWebhookEvents(env: Env): Promise<void> {
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`DELETE FROM processed_webhooks
+				  WHERE rowid IN (
+				    SELECT rowid FROM processed_webhooks
+				     WHERE created_at < datetime('now', '-90 days')
+				     LIMIT 500
+				  )`,
+			).run(),
+		'pruneWebhookEvents',
+	);
+}
+
 export async function getLinkTypeMap(env: Env, wikiPaths: string[]): Promise<Record<string, 'active' | 'edit'>> {
 	const paths = (wikiPaths || []).map((s) => String(s || '').trim()).filter(Boolean);
 	if (!paths.length) return {};

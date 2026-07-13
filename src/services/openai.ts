@@ -1,8 +1,13 @@
 import type { Env } from '../types.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
+import { MAX_PROVIDER_RESPONSE_BYTES, readResponseTextBounded } from '../utils/request.ts';
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
 
 export function normalizeOpenAIModel(raw?: string): string {
 	const trimmed = String(raw || '').trim();
@@ -87,18 +92,19 @@ export async function callOpenAI(env: Env, prompt: string, opts?: OpenAIRequestO
 			},
 			body: JSON.stringify(body),
 		},
-		{ retries: 1, timeoutMs }
+		{ retries: 1, timeoutMs },
 	);
 
 	if (!res.ok) {
-		const t = await res.text();
-		throw new Error(`OpenAI error ${res.status}: ${t}`);
+		throw new Error(`OpenAI request failed (${res.status})`);
 	}
 
-	const payload = await res.json();
+	const payload: unknown = JSON.parse(await readResponseTextBounded(res, MAX_PROVIDER_RESPONSE_BYTES));
 	const outputText = extractOpenAIOutputText(payload).trim();
+	const responseId = isRecord(payload) && typeof payload.id === 'string' ? payload.id : undefined;
+	const responseStatus = isRecord(payload) && typeof payload.status === 'string' ? payload.status : undefined;
 
-	return { outputText, raw: payload, model, id: payload?.id, status: payload?.status, background: opts?.background === true };
+	return { outputText, raw: payload, model, id: responseId, status: responseStatus, background: opts?.background === true };
 }
 
 export async function retrieveOpenAIResponse(env: Env, responseId: string) {
@@ -121,15 +127,16 @@ export async function retrieveOpenAIResponse(env: Env, responseId: string) {
 				'Content-Type': 'application/json',
 			},
 		},
-		{ retries: 1, timeoutMs }
+		{ retries: 1, timeoutMs },
 	);
 
 	if (!res.ok) {
-		const t = await res.text();
-		throw new Error(`OpenAI error ${res.status}: ${t}`);
+		throw new Error(`OpenAI request failed (${res.status})`);
 	}
 
-	const payload = await res.json();
+	const payload: unknown = JSON.parse(await readResponseTextBounded(res, MAX_PROVIDER_RESPONSE_BYTES));
 	const outputText = extractOpenAIOutputText(payload).trim();
-	return { outputText, raw: payload, id: payload?.id, status: payload?.status };
+	const retrievedId = isRecord(payload) && typeof payload.id === 'string' ? payload.id : undefined;
+	const responseStatus = isRecord(payload) && typeof payload.status === 'string' ? payload.status : undefined;
+	return { outputText, raw: payload, id: retrievedId, status: responseStatus };
 }

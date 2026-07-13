@@ -1,9 +1,10 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { toNYYear, parseWikipedia } from './wiki.ts';
-import { insertBatchReturningNew, selectDeathsByIds, selectDeathsByWikiPaths, selectPendingDeaths } from './db.ts';
+import { insertBatchReturningNew, pruneWebhookEvents, selectDeathsByIds, selectDeathsByWikiPaths, selectPendingDeaths } from './db.ts';
 import { evaluateDeaths, getDefaultLlmProvider, normalizeLlmProvider } from './llm.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
+import { MAX_WIKIPEDIA_BODY_BYTES, readResponseTextBounded } from '../utils/request.ts';
 import {
 	YearMonth,
 	getMonthlyPaths,
@@ -35,6 +36,11 @@ export type JobResult = {
 };
 
 export async function runJob(env: Env, opts?: { model?: string; provider?: string; pendingLimit?: number }) {
+	try {
+		await pruneWebhookEvents(env);
+	} catch (error) {
+		console.warn('Webhook replay ledger cleanup failed', error instanceof Error ? error.message : String(error));
+	}
 	const cfg = getConfig(env);
 	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
 	const year = toNYYear();
@@ -100,7 +106,7 @@ export async function runJob(env: Env, opts?: { model?: string; provider?: strin
 		);
 		if (!res.ok) throw new Error(`Fetch failed ${res.status}: ${targetUrl}`);
 
-		const html = await res.text();
+		const html = await readResponseTextBounded(res, MAX_WIKIPEDIA_BODY_BYTES);
 		const parsed = parseWikipedia(html, { monthName });
 		totalParsed += parsed.length;
 

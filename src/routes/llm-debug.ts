@@ -4,7 +4,10 @@ import { buildTelegramMessage, notifyTelegram } from '../services/telegram.ts';
 import { buildXStatus, postToXIfConfigured, shouldIncludeWikipediaLinkInXPost } from '../services/x.ts';
 import { runJob, runJobForIds } from '../services/job.ts';
 import { getDefaultLlmModel, getDefaultLlmProvider } from '../services/llm.ts';
-import { requireAuth } from '../auth.ts';
+import { requireAuth, verifyCsrfRequest, type AuthInfo } from '../auth.ts';
+import { BodyTooLargeError, MAX_ADMIN_FORM_BYTES, readRequestTextBounded } from '../utils/request.ts';
+import { adminContentSecurityPolicy } from '../utils/response.ts';
+import { randomToken } from '../utils/security.ts';
 
 type LlmRow = {
 	id: number;
@@ -55,7 +58,7 @@ export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext
 	const auth = await requireAuth(request, env);
 	if (auth instanceof Response) return auth;
 	if (request.method === 'POST') {
-		return handlePost(request, env, ctx);
+		return handlePost(request, env, ctx, auth);
 	}
 	const url = new URL(request.url);
 	const state = extractQueryState(url);
@@ -65,7 +68,9 @@ export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext
 	const llmProviderLabel = llmProvider === 'replicate' ? 'Replicate' : 'OpenAI';
 
 	const { sql, binds } = buildQuery(state);
-	const res = await env.DB.prepare(sql).bind(...binds).all<LlmRow>();
+	const res = await env.DB.prepare(sql)
+		.bind(...binds)
+		.all<LlmRow>();
 	const rows = res.results || [];
 
 	const total = rows.length;
@@ -75,27 +80,41 @@ export async function llmDebug(request: Request, env: Env, ctx: ExecutionContext
 
 	const groups = groupRows(pageRows);
 	const highlight = buildHighlightConfig(state.search);
-	const html = renderPage(groups, state, { hasNext, hasPrev }, highlight, notice || null, {
-		provider: llmProvider,
-		providerLabel: llmProviderLabel,
-		model: llmModel,
-	});
+	const nonce = randomToken(18);
+	const html = renderPage(
+		groups,
+		state,
+		{ hasNext, hasPrev },
+		highlight,
+		notice || null,
+		{
+			provider: llmProvider,
+			providerLabel: llmProviderLabel,
+			model: llmModel,
+		},
+		auth.csrfToken,
+		nonce,
+	);
 
 	return new Response(html, {
 		headers: {
 			'content-type': 'text/html; charset=utf-8',
 			'cache-control': 'no-store',
+			'content-security-policy': adminContentSecurityPolicy(nonce),
 		},
 	});
 }
 
-async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	let form: FormData;
+async function handlePost(request: Request, env: Env, ctx: ExecutionContext, auth: AuthInfo): Promise<Response> {
+	let form: URLSearchParams;
 	try {
-		form = await request.formData();
-	} catch {
-		return new Response('Invalid form', { status: 400 });
+		form = new URLSearchParams(await readRequestTextBounded(request, MAX_ADMIN_FORM_BYTES));
+	} catch (error) {
+		return new Response(error instanceof BodyTooLargeError ? 'Request too large' : 'Invalid form', {
+			status: error instanceof BodyTooLargeError ? 413 : 400,
+		});
 	}
+	if (!(await verifyCsrfRequest(request, env, auth, form.get('_csrf') || ''))) return new Response('Forbidden', { status: 403 });
 
 	const action = toStr(form.get('action'));
 	const returnTo = sanitizeReturnTo(toStr(form.get('returnTo')));
@@ -123,7 +142,7 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 				} catch (err) {
 					console.error('Manual run via /llm-debug error', err);
 				}
-			})()
+			})(),
 		);
 		return redirectTo(addNoticeToReturnTo(request, returnTo, 'Job started'));
 	}
@@ -142,7 +161,7 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 		const row = await env.DB.prepare(
 			`SELECT id, name, wiki_path, link_type, age, description, cause, llm_result, llm_rejection_reason
          FROM deaths
-        WHERE id = ?1`
+        WHERE id = ?1`,
 		)
 			.bind(id)
 			.first<LlmRow>();
@@ -152,15 +171,11 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 		const statusChanged = nextStatus !== row.llm_result;
 
 		const age = parseOptionalInt(toStr(form.get('age')));
-		const description = normalizeOptionalText(form.get('description'));
-		const cause = normalizeOptionalText(form.get('cause'));
+		const description = normalizeOptionalText(form.get('description'), 2_000);
+		const cause = normalizeOptionalText(form.get('cause'), 500);
 
-		const rejection = nextStatus === 'yes' ? null : row.llm_rejection_reason ?? null;
-		const llmDateSql = statusChanged
-			? nextStatus === 'yes'
-				? 'CURRENT_TIMESTAMP'
-				: 'NULL'
-			: 'llm_date_time';
+		const rejection = nextStatus === 'yes' ? null : (row.llm_rejection_reason ?? null);
+		const llmDateSql = statusChanged ? (nextStatus === 'yes' ? 'CURRENT_TIMESTAMP' : 'NULL') : 'llm_date_time';
 
 		const sql = `UPDATE deaths
         SET age = ?1,
@@ -192,7 +207,7 @@ async function handlePost(request: Request, env: Env, ctx: ExecutionContext): Pr
 					wiki_path: row.wiki_path,
 					link_type: row.link_type,
 				},
-				{ includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) }
+				{ includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) },
 			);
 			await postToXIfConfigured(env, xText);
 		}
@@ -241,13 +256,13 @@ function parseOptionalInt(raw: string): number | null {
 	const trimmed = raw.trim();
 	if (!trimmed) return null;
 	const n = Number(trimmed);
-	return Number.isFinite(n) ? Math.floor(n) : null;
+	return Number.isFinite(n) && n >= 0 && n <= 150 ? Math.floor(n) : null;
 }
 
-function normalizeOptionalText(value: FormDataEntryValue | null): string | null {
-	if (typeof value !== 'string') return null;
+function normalizeOptionalText(value: string | null, maxLength: number): string | null {
+	if (value == null) return null;
 	const trimmed = value.trim();
-	return trimmed ? trimmed : null;
+	return trimmed ? trimmed.slice(0, maxLength) : null;
 }
 
 function normalizeLlmResult(value: string): string {
@@ -278,7 +293,10 @@ function parseMultiSelect<T extends string>(values: string[], allowed: readonly 
 	const allowSet = new Set<string>(allowed);
 	const out: T[] = [];
 	for (const raw of values) {
-		for (const part of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+		for (const part of raw
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean)) {
 			if (allowSet.has(part) && !out.includes(part as T)) out.push(part as T);
 		}
 	}
@@ -293,7 +311,7 @@ function buildQuery(state: QueryState): { sql: string; binds: Array<string | num
 		const normalized = escapeLike(state.search.toLowerCase());
 		const likeTerm = `%${normalized}%`;
 		where.push(
-			`(LOWER(name) LIKE ? ESCAPE '\\' OR LOWER(wiki_path) LIKE ? ESCAPE '\\' OR CAST(age AS TEXT) LIKE ? OR LOWER(description) LIKE ? ESCAPE '\\' OR LOWER(cause) LIKE ? ESCAPE '\\')`
+			`(LOWER(name) LIKE ? ESCAPE '\\' OR LOWER(wiki_path) LIKE ? ESCAPE '\\' OR CAST(age AS TEXT) LIKE ? OR LOWER(description) LIKE ? ESCAPE '\\' OR LOWER(cause) LIKE ? ESCAPE '\\')`,
 		);
 		binds.push(likeTerm, likeTerm, `%${escapeLike(state.search)}%`, likeTerm, likeTerm);
 	}
@@ -462,7 +480,9 @@ function renderPage(
 	pageMeta: { hasNext: boolean; hasPrev: boolean },
 	highlight: HighlightConfig | null,
 	notice: string | null,
-	llmMeta: { provider: string; providerLabel: string; model: string }
+	llmMeta: { provider: string; providerLabel: string; model: string },
+	csrfToken: string,
+	nonce: string,
 ) {
 	const baseParams = new URLSearchParams();
 	if (state.search) baseParams.set('search', state.search);
@@ -491,7 +511,7 @@ function renderPage(
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
 	<title>LLM Debug • Celebrity Death Bot</title>
-	<style>
+	<style nonce="${escapeHtml(nonce)}">
 		:root {
 			--bg: #f5f7fb;
 			--panel: #ffffff;
@@ -591,9 +611,11 @@ function renderPage(
 			<div class="header-copy">
 				<h1>LLM Evaluation Debug</h1>
 				<p class="subtitle">Inspect LLM outputs grouped by record creation time. Default: ${escapeHtml(llmMeta.providerLabel)} (${escapeHtml(
-		llmMeta.model
-	)}).</p>
+					llmMeta.model,
+				)}).</p>
 			</div>
+			<a class="secondary" href="/x/oauth/start">Connect X</a>
+			<form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" /><button class="secondary" type="submit">Sign out</button></form>
 		</div>
 	</header>
 	<main class="container">
@@ -639,12 +661,13 @@ function renderPage(
 			${state.llmResults.length ? `<div class="badge">LLM: ${state.llmResults.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			${state.linkTypes.length ? `<div class="badge">Links: ${state.linkTypes.map((r) => escapeHtml(r)).join(', ')}</div>` : ''}
 			<form class="llm-form" method="post" data-confirm="Run the full cron job now?" data-confirm-cta="Yes, run it">
+				<input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
 				<input type="hidden" name="action" value="run-cron" />
 				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
 				<button class="danger" type="submit">Run Cron Processing</button>
 			</form>
 		</section>
-		${groups.length ? renderGroups(groups, highlight, returnTo, llmMeta) : `<div class="empty">No results found for the selected filters.</div>`}
+		${groups.length ? renderGroups(groups, highlight, returnTo, llmMeta, csrfToken) : `<div class="empty">No results found for the selected filters.</div>`}
 		<nav class="pagination">
 			${renderPagerLink('Newer', `/llm-debug?${prevParams.toString()}`, pageMeta.hasPrev)}
 			${renderPagerLink('Older', `/llm-debug?${nextParams.toString()}`, pageMeta.hasNext)}
@@ -660,7 +683,7 @@ function renderPage(
 			</div>
 		</dialog>
 	</main>
-	<script>
+	<script nonce="${escapeHtml(nonce)}">
 		(() => {
 			const dialog = document.getElementById('confirmDialog');
 			if (!(dialog instanceof HTMLDialogElement)) return;
@@ -717,7 +740,7 @@ function renderCheckboxGroup<T extends string>(name: string, labelText: string, 
 			.map((opt) => {
 				const id = `${name}-${opt}`;
 				return `<label for="${escapeHtml(id)}"><input type="checkbox" id="${escapeHtml(id)}" name="${escapeHtml(
-					name
+					name,
 				)}" value="${escapeHtml(opt)}"${set.has(opt) ? ' checked' : ''} /> ${escapeHtml(opt)}</label>`;
 			})
 			.join('')}
@@ -729,7 +752,8 @@ function renderGroups(
 	groups: Array<{ key: string | null; label: string; rows: LlmRow[] }>,
 	highlight: HighlightConfig | null,
 	returnTo: string,
-	llmMeta: { provider: string; providerLabel: string; model: string }
+	llmMeta: { provider: string; providerLabel: string; model: string },
+	csrfToken: string,
 ): string {
 	return `<section class="groups">
 	${groups
@@ -737,9 +761,9 @@ function renderGroups(
 			(group) => `<article class="group">
 			<div class="group-header">${escapeHtml(group.label)}</div>
 			<div class="group-items">
-				${group.rows.map((row) => renderRow(row, highlight, returnTo, llmMeta)).join('')}
+				${group.rows.map((row) => renderRow(row, highlight, returnTo, llmMeta, csrfToken)).join('')}
 			</div>
-		</article>`
+		</article>`,
 		)
 		.join('')}
 </section>`;
@@ -749,7 +773,8 @@ function renderRow(
 	row: LlmRow,
 	highlight: HighlightConfig | null,
 	returnTo: string,
-	llmMeta: { provider: string; providerLabel: string; model: string }
+	llmMeta: { provider: string; providerLabel: string; model: string },
+	csrfToken: string,
 ): string {
 	const isActive = row.link_type === 'active';
 	const url = isActive ? buildSafeUrl(row.wiki_path) : '';
@@ -767,7 +792,7 @@ function renderRow(
 		? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${nameHtml}</a>`
 		: `<span class="name-disabled">${nameHtml}</span>`;
 	const statusOptions = LLM_RESULT_OPTIONS.map(
-		(opt) => `<option value="${escapeHtml(opt)}"${opt === llmLabel ? ' selected' : ''}>${escapeHtml(opt)}</option>`
+		(opt) => `<option value="${escapeHtml(opt)}"${opt === llmLabel ? ' selected' : ''}>${escapeHtml(opt)}</option>`,
 	).join('');
 	const ageValue = row.age == null ? '' : String(row.age);
 	const descriptionValue = row.description ?? '';
@@ -784,8 +809,8 @@ function renderRow(
 							wiki_path: row.wiki_path,
 							link_type: row.link_type,
 						},
-						{ includeWikipediaLink: true }
-					)
+						{ includeWikipediaLink: true },
+					),
 				)
 			: '';
 
@@ -810,6 +835,7 @@ function renderRow(
 			<details class="edit-panel">
 				<summary>Update</summary>
 				<form class="edit-form" method="post">
+					<input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
 					<input type="hidden" name="action" value="update" />
 					<input type="hidden" name="id" value="${row.id}" />
 					<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />
@@ -831,6 +857,7 @@ function renderRow(
 				</form>
 			</details>
 			<form class="llm-form" method="post" data-confirm="Refresh via LLM?" data-confirm-cta="Yes, refresh">
+				<input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
 				<input type="hidden" name="action" value="reevaluate" />
 				<input type="hidden" name="id" value="${row.id}" />
 				<input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}" />

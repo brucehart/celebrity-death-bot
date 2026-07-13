@@ -1,47 +1,62 @@
 import type { Env } from '../types.ts';
 import { coalesceOutput } from '../utils/json.ts';
+import { BodyTooLargeError, MAX_WEBHOOK_BODY_BYTES, readRequestTextBounded } from '../utils/request.ts';
 import { applyLlmOutput, extractCandidatePathsFromReplicatePayload } from '../services/llm-output.ts';
+import { claimWebhookEvent, completeWebhookEvent, failWebhookEvent } from '../services/db.ts';
 import { verifyReplicateWebhook } from '../utils/replicate-webhook.ts';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export async function replicateCallback(request: Request, env: Env): Promise<Response> {
-  // Read raw body text once for signature verification and JSON parsing
-  let bodyText = '';
-  try {
-    bodyText = await request.clone().text();
-  } catch {
-    return new Response('Invalid body', { status: 400 });
-  }
+	if (!env.REPLICATE_WEBHOOK_SECRET) return new Response('Webhook is not configured', { status: 503 });
 
-  const manualOverride = (() => {
-    const raw = request.headers.get('Authorization') || '';
-    const trimmed = raw.trim();
-    if (!trimmed || !env.MANUAL_RUN_SECRET) return false;
-    const bearer = /^Bearer\s+(.+)$/i.exec(trimmed);
-    const token = (bearer ? bearer[1] : trimmed).trim();
-    return token === env.MANUAL_RUN_SECRET;
-  })();
+	let bodyText: string;
+	try {
+		bodyText = await readRequestTextBounded(request, MAX_WEBHOOK_BODY_BYTES);
+	} catch (error) {
+		return new Response(error instanceof BodyTooLargeError ? 'Request too large' : 'Invalid body', {
+			status: error instanceof BodyTooLargeError ? 413 : 400,
+		});
+	}
 
-  // If configured, verify Replicate webhook HMAC signature and timestamp
-  if (env.REPLICATE_WEBHOOK_SECRET && !manualOverride) {
-    const res = await verifyReplicateWebhook(request, env.REPLICATE_WEBHOOK_SECRET, bodyText);
-    if (!res.ok) return new Response(res.error, { status: res.code });
-  }
+	const verification = await verifyReplicateWebhook(request, env.REPLICATE_WEBHOOK_SECRET, bodyText);
+	if (!verification.ok) return new Response(verification.error, { status: verification.code });
 
-  // Parse JSON payload only after signature verification
-  let payload: any;
-  try {
-    payload = JSON.parse(bodyText);
-  } catch {
-    return new Response('Invalid JSON', { status: 400 });
-  }
+	let payload: unknown;
+	try {
+		payload = JSON.parse(bodyText);
+	} catch {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+	if (!isRecord(payload)) return new Response('Invalid payload', { status: 400 });
 
-  if ((payload?.status ?? '').toLowerCase() !== 'succeeded') {
-    return Response.json({ ok: true, message: `Ignored status=${payload?.status ?? 'unknown'}` });
-  }
+	const status = typeof payload.status === 'string' ? payload.status.toLowerCase() : '';
+	if (status !== 'succeeded') return Response.json({ ok: true, ignored: status || 'unknown' });
+	const predictionId = typeof payload.id === 'string' && payload.id.length <= 200 ? payload.id.trim() : '';
+	if (!predictionId) return new Response('Missing prediction id', { status: 400 });
+	const eventId = `${predictionId}:${status}`;
+	try {
+		if (!(await claimWebhookEvent(env, 'replicate', eventId))) return Response.json({ ok: true, duplicate: true });
+	} catch (error) {
+		console.error('Replicate webhook claim failed', error instanceof Error ? error.message : String(error));
+		return new Response('Webhook processing failed', { status: 500 });
+	}
 
-  const rawOutput = payload?.output;
-  const joined = coalesceOutput(rawOutput).trim();
-  const candidatePaths = extractCandidatePathsFromReplicatePayload(payload);
-  const result = await applyLlmOutput(env, joined, candidatePaths);
-  return Response.json({ ok: true, ...result });
+	try {
+		const joined = coalesceOutput(payload.output).trim();
+		const candidatePaths = extractCandidatePathsFromReplicatePayload(payload);
+		const result = await applyLlmOutput(env, joined, candidatePaths);
+		await completeWebhookEvent(env, 'replicate', eventId);
+		return Response.json({ ok: true, ...result });
+	} catch (error) {
+		console.error('Replicate webhook processing failed', error instanceof Error ? error.message : String(error));
+		try {
+			await failWebhookEvent(env, 'replicate', eventId, error);
+		} catch (recordError) {
+			console.error('Replicate webhook failure recording failed', recordError instanceof Error ? recordError.message : String(recordError));
+		}
+		return new Response('Webhook processing failed', { status: 500 });
+	}
 }

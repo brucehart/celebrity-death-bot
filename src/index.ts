@@ -10,12 +10,13 @@ import { manualRun } from './routes/run.ts';
 import { telegramWebhook } from './routes/telegram-webhook.ts';
 import { health } from './routes/health.ts';
 import { runJob } from './services/job.ts';
-import { xOauthStart, xOauthCallback, xOauthStatus } from './services/x.ts';
+import { xOauthStart, xOauthCallback, xOauthStatus } from './routes/x-oauth.ts';
 import { getRecentPosts } from './routes/posts.ts';
 import { getMeta } from './routes/meta.ts';
 import { llmDebug } from './routes/llm-debug.ts';
-import { login, oauthCallback } from './routes/auth.ts';
+import { login, logout, oauthCallback } from './routes/auth.ts';
 import { alertOnJobError, alertOnJobResult } from './services/alerts.ts';
+import { withSecurityHeaders } from './utils/response.ts';
 
 const router = new Router()
 	.on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
@@ -29,14 +30,16 @@ const router = new Router()
 	.on('GET', '/llm-debug', (req, env, ctx) => llmDebug(req, env, ctx))
 	.on('POST', '/llm-debug', (req, env, ctx) => llmDebug(req, env, ctx))
 	.on('GET', '/login', (req, env) => login(req, env))
+	.on('POST', '/logout', (req, env) => logout(req, env))
 	.on('GET', '/oauth/callback', (req, env) => oauthCallback(req, env))
-	.on('GET', '/x/oauth/start', (_req, env) => xOauthStart(env, env.BASE_URL))
-	.on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(env, req.url, env.BASE_URL))
-	.on('GET', '/x/oauth/status', (_req, env) => xOauthStatus(env))
+	.on('GET', '/x/oauth/start', (req, env) => xOauthStart(req, env))
+	.on('POST', '/x/oauth/start', (req, env) => xOauthStart(req, env))
+	.on('GET', '/x/oauth/callback', (req, env) => xOauthCallback(req, env))
+	.on('GET', '/x/oauth/status', (req, env) => xOauthStatus(req, env))
 	.on('GET', '/health', () => health());
 
 export default {
-	async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
 		ctx.waitUntil(
 			(async () => {
 				try {
@@ -55,15 +58,15 @@ export default {
 		const url = new URL(request.url);
 		// Serve privacy policy via Workers Assets when explicitly requested
 		if (url.pathname === '/privacy' && request.method === 'GET') {
-			return env.ASSETS.fetch(new Request('privacy.html', request));
+			return withSecurityHeaders(await env.ASSETS.fetch(new Request('privacy.html', request)));
 		}
 		// Route first
 		const res = await router.handle(request, env, ctx);
 		// Fallback to static assets (images, CSS, etc.) only when no route matched
-		if (res.status === 404) {
+		if (res.status === 404 && (request.method === 'GET' || request.method === 'HEAD')) {
 			const asset = await env.ASSETS.fetch(request);
-			return asset;
+			return withSecurityHeaders(asset);
 		}
-		return res;
+		return withSecurityHeaders(res);
 	},
-};
+} satisfies ExportedHandler<Env>;

@@ -2,15 +2,22 @@
 	"name": "celebrity-death-bot",
 	"version": "1.0.0",
 	"private": true,
+	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types",
-		"test": "node --test"
+		"test": "npm run test:unit && npm run test:worker",
+		"test:unit": "node --test tests/*.test.js",
+		"test:worker": "vitest run"
 	},
 	"devDependencies": {
-		"typescript": "^5.5.2",
-		"wrangler": "^4.88.0"
+		"@cloudflare/vitest-pool-workers": "^0.18.4",
+		"@types/node": "^26.1.1",
+		"prettier": "^3.9.5",
+		"typescript": "^5.9.3",
+		"vitest": "^4.1.10",
+		"wrangler": "^4.110.0"
 	}
 }
