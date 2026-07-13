@@ -6,17 +6,21 @@ import { telegramWebhook } from '../src/routes/telegram-webhook.ts';
 const makeEnv = (secret) => ({
 	TELEGRAM_WEBHOOK_SECRET: secret,
 	DB: /** @type any */ ({
-		prepare: () => ({
-			bind() {
-				return this;
-			},
-			async first() {
-				return { claimed: 1 };
-			},
-			async run() {
-				return { meta: { changes: 1 } };
-			},
-		}),
+		prepare: () => {
+			let values = [];
+			return {
+				bind(...bound) {
+					values = bound;
+					return this;
+				},
+				async first() {
+					return { claim_token: values[2] };
+				},
+				async run() {
+					return { meta: { changes: 1 } };
+				},
+			};
+		},
 	}),
 	TELEGRAM_BOT_TOKEN: 'dummy',
 	BASE_URL: 'https://example.com',
@@ -67,14 +71,16 @@ test('replayed update IDs are acknowledged without processing twice', async () =
 	const env = makeEnv('s3cret');
 	env.DB = {
 		prepare(sql) {
+			let values = [];
 			return {
-				bind() {
+				bind(...bound) {
+					values = bound;
 					return this;
 				},
 				async first() {
 					if (!sql.includes('INSERT INTO processed_webhooks') || claimed) return null;
 					claimed = true;
-					return { claimed: 1 };
+					return { claim_token: values[2] };
 				},
 				async run() {
 					return { meta: { changes: 1 } };

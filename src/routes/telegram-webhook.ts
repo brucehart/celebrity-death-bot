@@ -31,8 +31,11 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
 	if (!isRecord(update)) return new Response('Invalid payload', { status: 400 });
 	const updateId = typeof update.update_id === 'number' && Number.isSafeInteger(update.update_id) ? String(update.update_id) : '';
 	if (!updateId) return new Response('Missing update id', { status: 400 });
+	let claimToken: string;
 	try {
-		if (!(await claimWebhookEvent(env, 'telegram', updateId))) return Response.json({ ok: true, duplicate: true });
+		const claimed = await claimWebhookEvent(env, 'telegram', updateId);
+		if (!claimed) return Response.json({ ok: true, duplicate: true });
+		claimToken = claimed;
 	} catch (error) {
 		console.error('Telegram webhook claim failed', error instanceof Error ? error.message : String(error));
 		return new Response('Webhook processing failed', { status: 500 });
@@ -45,48 +48,43 @@ export async function telegramWebhook(request: Request, env: Env): Promise<Respo
 		const chatId = typeof chatIdValue === 'string' || typeof chatIdValue === 'number' ? String(chatIdValue) : '';
 		const text = message && typeof message.text === 'string' ? message.text.trim() : '';
 		if (!chatId || !text) {
-			await completeWebhookEvent(env, 'telegram', updateId);
+			await completeWebhookEvent(env, 'telegram', updateId, claimToken);
 			return Response.json({ ok: true, ignored: true });
 		}
 
 		const command = text.split(/\s+/)[0].toLowerCase();
+		let reply: string;
 		if (command === '/start' || command === '/subscribe' || command === '/join') {
 			const current = await getSubscriberStatus(env, chatId);
 			await subscribeTelegram(env, chatId);
-			await notifyTelegramSingle(env, chatId, current === 1 ? 'You are already subscribed.' : 'Subscribed. You will receive alerts here.');
+			reply = current === 1 ? 'You are already subscribed.' : 'Subscribed. You will receive alerts here.';
 		} else if (command === '/stop' || command === '/unsubscribe' || command === '/leave') {
 			const current = await getSubscriberStatus(env, chatId);
 			await unsubscribeTelegram(env, chatId);
-			await notifyTelegramSingle(
-				env,
-				chatId,
-				current === 0 || current === null ? 'You are already unsubscribed.' : 'Unsubscribed. You will no longer receive alerts.',
-			);
+			reply = current === 0 || current === null ? 'You are already unsubscribed.' : 'Unsubscribed. You will no longer receive alerts.';
 		} else if (command === '/status') {
 			const status = await getSubscriberStatus(env, chatId);
-			await notifyTelegramSingle(env, chatId, status === 1 ? 'Status: subscribed.' : 'Status: not subscribed.');
+			reply = status === 1 ? 'Status: subscribed.' : 'Status: not subscribed.';
 		} else if (command === '/commands' || command === '/help') {
-			await notifyTelegramSingle(
-				env,
-				chatId,
-				[
-					'Available commands:',
-					'/subscribe – Subscribe to alerts',
-					'/unsubscribe – Unsubscribe from alerts',
-					'/status – Show current subscription status',
-					'/help – Show this list',
-				].join('\n'),
-			);
+			reply = [
+				'Available commands:',
+				'/subscribe – Subscribe to alerts',
+				'/unsubscribe – Unsubscribe from alerts',
+				'/status – Show current subscription status',
+				'/help – Show this list',
+			].join('\n');
 		} else {
-			await notifyTelegramSingle(env, chatId, 'Unknown command. Try /subscribe, /unsubscribe, /status, or /commands.');
+			reply = 'Unknown command. Try /subscribe, /unsubscribe, /status, or /commands.';
 		}
 
-		await completeWebhookEvent(env, 'telegram', updateId);
+		// Fence the non-idempotent reply after all retryable D1 work succeeds.
+		await completeWebhookEvent(env, 'telegram', updateId, claimToken);
+		await notifyTelegramSingle(env, chatId, reply);
 		return Response.json({ ok: true });
 	} catch (error) {
 		console.error('Telegram webhook processing failed', error instanceof Error ? error.message : String(error));
 		try {
-			await failWebhookEvent(env, 'telegram', updateId, error);
+			await failWebhookEvent(env, 'telegram', updateId, claimToken, error);
 		} catch (recordError) {
 			console.error('Telegram webhook failure recording failed', recordError instanceof Error ? recordError.message : String(recordError));
 		}

@@ -39,24 +39,33 @@ describe('Webhook replay ledger', () => {
 	});
 
 	it('deduplicates active and completed deliveries', async () => {
-		const claims = await Promise.all([
+		const claimTokens = await Promise.all([
 			claimWebhookEvent(env, 'replicate', 'delivery-1'),
 			claimWebhookEvent(env, 'replicate', 'delivery-1'),
 			claimWebhookEvent(env, 'replicate', 'delivery-1'),
 		]);
-		expect(claims.filter(Boolean)).toHaveLength(1);
+		expect(claimTokens.filter(Boolean)).toHaveLength(1);
+		const claimToken = claimTokens.find(Boolean);
 
-		await completeWebhookEvent(env, 'replicate', 'delivery-1');
-		expect(await claimWebhookEvent(env, 'replicate', 'delivery-1')).toBe(false);
+		await completeWebhookEvent(env, 'replicate', 'delivery-1', claimToken!);
+		await completeWebhookEvent(env, 'replicate', 'delivery-1', claimToken!);
+		await failWebhookEvent(env, 'replicate', 'delivery-1', claimToken!, new Error('post-effect failure'));
+		expect(await claimWebhookEvent(env, 'replicate', 'delivery-1')).toBeNull();
+		const completed = await env.DB.prepare(
+			`SELECT status, error FROM processed_webhooks
+			  WHERE provider = 'replicate' AND event_id = 'delivery-1'`,
+		).first<{ status: string; error: string | null }>();
+		expect(completed).toEqual({ status: 'completed', error: null });
 	});
 
 	it('allows a failed delivery to be claimed again', async () => {
-		expect(await claimWebhookEvent(env, 'openai', 'delivery-2')).toBe(true);
-		await failWebhookEvent(env, 'openai', 'delivery-2', new Error('temporary failure'));
+		const firstClaim = await claimWebhookEvent(env, 'openai', 'delivery-2');
+		expect(firstClaim).toBeTruthy();
+		await failWebhookEvent(env, 'openai', 'delivery-2', firstClaim!, new Error('temporary failure'));
 
 		const retryClaims = await Promise.all([claimWebhookEvent(env, 'openai', 'delivery-2'), claimWebhookEvent(env, 'openai', 'delivery-2')]);
 		expect(retryClaims.filter(Boolean)).toHaveLength(1);
-		expect(await claimWebhookEvent(env, 'openai', 'delivery-2')).toBe(false);
+		expect(await claimWebhookEvent(env, 'openai', 'delivery-2')).toBeNull();
 
 		const row = await env.DB.prepare(
 			`SELECT status, error, completed_at FROM processed_webhooks
@@ -66,14 +75,19 @@ describe('Webhook replay ledger', () => {
 	});
 
 	it('allows a stale processing delivery to be claimed again', async () => {
-		expect(await claimWebhookEvent(env, 'telegram', 'delivery-3')).toBe(true);
+		const staleClaim = await claimWebhookEvent(env, 'telegram', 'delivery-3');
+		expect(staleClaim).toBeTruthy();
 		await env.DB.prepare(
 			`UPDATE processed_webhooks
 			    SET created_at = datetime('now', '-16 minutes')
 			  WHERE provider = 'telegram' AND event_id = 'delivery-3'`,
 		).run();
 
-		expect(await claimWebhookEvent(env, 'telegram', 'delivery-3')).toBe(true);
-		expect(await claimWebhookEvent(env, 'telegram', 'delivery-3')).toBe(false);
+		const reclaimedClaim = await claimWebhookEvent(env, 'telegram', 'delivery-3');
+		expect(reclaimedClaim).toBeTruthy();
+		expect(reclaimedClaim).not.toBe(staleClaim);
+		await expect(completeWebhookEvent(env, 'telegram', 'delivery-3', staleClaim!)).rejects.toThrow('claim lost');
+		await completeWebhookEvent(env, 'telegram', 'delivery-3', reclaimedClaim!);
+		expect(await claimWebhookEvent(env, 'telegram', 'delivery-3')).toBeNull();
 	});
 });

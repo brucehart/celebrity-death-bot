@@ -67,8 +67,11 @@ export async function openaiWebhook(request: Request, env: Env): Promise<Respons
 	if (!responseId) return new Response('Missing response id', { status: 400 });
 
 	const eventId = `${responseId}:${eventType}`;
+	let claimToken: string;
 	try {
-		if (!(await claimWebhookEvent(env, 'openai', eventId))) return Response.json({ ok: true, duplicate: true });
+		const claimed = await claimWebhookEvent(env, 'openai', eventId);
+		if (!claimed) return Response.json({ ok: true, duplicate: true });
+		claimToken = claimed;
 	} catch (error) {
 		console.error('OpenAI webhook claim failed', error instanceof Error ? error.message : String(error));
 		return new Response('Webhook processing failed', { status: 500 });
@@ -81,17 +84,19 @@ export async function openaiWebhook(request: Request, env: Env): Promise<Respons
 
 		if (eventType !== 'response.completed') {
 			if (candidatePaths.length) await markDeathsAsError(env, candidatePaths);
-			await completeWebhookEvent(env, 'openai', eventId);
+			await completeWebhookEvent(env, 'openai', eventId, claimToken);
 			return Response.json({ ok: true, status: eventType, errored: candidatePaths.length });
 		}
 
-		const result = await applyLlmOutput(env, response.outputText || '', candidatePaths);
-		await completeWebhookEvent(env, 'openai', eventId);
+		const result = await applyLlmOutput(env, response.outputText || '', candidatePaths, {
+			beforeSideEffects: () => completeWebhookEvent(env, 'openai', eventId, claimToken),
+		});
+		await completeWebhookEvent(env, 'openai', eventId, claimToken);
 		return Response.json({ ok: true, response_id: responseId, ...result });
 	} catch (error) {
 		console.error('OpenAI webhook processing failed', error instanceof Error ? error.message : String(error));
 		try {
-			await failWebhookEvent(env, 'openai', eventId, error);
+			await failWebhookEvent(env, 'openai', eventId, claimToken, error);
 		} catch (recordError) {
 			console.error('OpenAI webhook failure recording failed', recordError instanceof Error ? recordError.message : String(recordError));
 		}

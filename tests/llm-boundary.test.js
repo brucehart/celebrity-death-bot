@@ -14,12 +14,14 @@ const canonicalRow = {
 
 function makeEnv() {
 	const writes = [];
+	const reads = [];
 	const DB = {
 		prepare(sql) {
 			return {
 				bind(...values) {
 					return {
 						async all() {
+							reads.push(sql);
 							if (sql.includes('FROM deaths')) return { results: [canonicalRow] };
 							if (sql.includes('FROM subscribers')) return { results: [] };
 							return { results: [] };
@@ -33,7 +35,7 @@ function makeEnv() {
 			};
 		},
 	};
-	return { env: { DB }, writes };
+	return { env: { DB }, reads, writes };
 }
 
 test('LLM output is rejected without a trusted candidate set', async () => {
@@ -51,6 +53,7 @@ test('LLM cannot select a wiki path outside the candidate batch', async () => {
 
 test('selected notifications and updates use canonical database fields', async () => {
 	const { env, writes } = makeEnv();
+	let fencedAfterUpdate = false;
 	const result = await applyLlmOutput(
 		env,
 		JSON.stringify({
@@ -58,8 +61,35 @@ test('selected notifications and updates use canonical database fields', async (
 			rejected: [],
 		}),
 		['Trusted_Person'],
+		{
+			beforeSideEffects: async () => {
+				fencedAfterUpdate = writes.some((write) => write.sql.includes("llm_result = 'yes'"));
+			},
+		},
 	);
 	assert.equal(result.notified, 1);
+	assert.equal(fencedAfterUpdate, true);
 	const update = writes.find((write) => write.sql.includes("llm_result = 'yes'"));
 	assert.deepEqual(update.values, ['canonical cause', 'Canonical Wikipedia description', 'Trusted_Person']);
+});
+
+test('selected notifications do not start until the side-effect fence succeeds', async () => {
+	const { env, reads, writes } = makeEnv();
+	await assert.rejects(
+		() =>
+			applyLlmOutput(env, JSON.stringify({ selected: [{ wiki_path: 'Trusted_Person' }], rejected: [] }), ['Trusted_Person'], {
+				beforeSideEffects: async () => {
+					throw new Error('fence failed');
+				},
+			}),
+		/fence failed/,
+	);
+	assert.equal(
+		writes.some((write) => write.sql.includes("llm_result = 'yes'")),
+		true,
+	);
+	assert.equal(
+		reads.some((sql) => sql.includes('FROM subscribers')),
+		false,
+	);
 });

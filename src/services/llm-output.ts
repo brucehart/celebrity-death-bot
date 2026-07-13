@@ -11,6 +11,9 @@ type SelectedRejected = {
 };
 
 type Rejection = { wiki_path: string; reason?: string | null };
+type ApplyLlmOutputOptions = {
+	beforeSideEffects?: () => Promise<void>;
+};
 
 const MAX_REASON_CHARS = 200;
 
@@ -151,7 +154,7 @@ export function extractCandidatePathsFromReplicatePayload(payload: any): string[
 	return extractWikiPathsFromPrompt(prompt);
 }
 
-export async function applyLlmOutput(env: Env, outputText: string, candidatePaths: string[]) {
+export async function applyLlmOutput(env: Env, outputText: string, candidatePaths: string[], options: ApplyLlmOutputOptions = {}) {
 	const candidates = Array.from(
 		new Set(
 			(candidatePaths || [])
@@ -201,16 +204,9 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 		}
 	}
 
-	let notified = 0;
 	const selectedPaths = Array.from(new Set(selectedItems.map((item) => readWikiPath(item, candidateMap)).filter(Boolean)));
-	for (const wikiPath of selectedPaths) {
-		const row = rowsByPath.get(wikiPath);
-		if (!row) continue;
-		const msg = buildTelegramMessage(row);
-		await notifyTelegram(env, msg);
-		const xText = buildXStatus(row, { includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) });
-		await postToXIfConfigured(env, xText);
-		notified++;
+	const selectedRows = selectedPaths.map((wikiPath) => rowsByPath.get(wikiPath)).filter((row): row is DeathEntry => Boolean(row));
+	for (const row of selectedRows) {
 		await updateDeathLLM(env, row.wiki_path, row.cause, row.description);
 	}
 
@@ -222,6 +218,20 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 		const filtered = Array.from(rejectedByPath.values());
 		await markDeathsAsNo(env, filtered);
 		rejected = filtered.length;
+	}
+
+	// Persist every retryable D1 change before fencing the event as complete.
+	// No database operation may follow an external notification: if a send has
+	// an ambiguous outcome, the completed ledger row prevents a duplicate retry.
+	if (selectedRows.length) await options.beforeSideEffects?.();
+
+	let notified = 0;
+	for (const row of selectedRows) {
+		const msg = buildTelegramMessage(row);
+		await notifyTelegram(env, msg);
+		const xText = buildXStatus(row, { includeWikipediaLink: shouldIncludeWikipediaLinkInXPost(env) });
+		await postToXIfConfigured(env, xText);
+		notified++;
 	}
 
 	return { notified, rejected, errored: 0 } as const;

@@ -183,59 +183,79 @@ type DatabaseEnv = Pick<Env, 'DB'>;
 /**
  * Atomically claims a provider delivery. A false result means the delivery was
  * completed or is still being processed and must not perform side effects
- * again. Failed deliveries are immediately retryable, while processing claims
- * are reclaimable after 15 minutes so a terminated Worker cannot block the
- * provider retry forever.
+ * again. Pre-effect failures are immediately retryable, while processing
+ * claims are reclaimable after 15 minutes so a terminated Worker cannot block
+ * the provider retry forever.
  */
-export async function claimWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string): Promise<boolean> {
+export async function claimWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string): Promise<string | null> {
+	const claimToken = crypto.randomUUID();
 	const claimed = await withD1Retry(
 		() =>
 			env.DB.prepare(
-				`INSERT INTO processed_webhooks(provider, event_id, status, created_at)
-				 VALUES(?1, ?2, 'processing', CURRENT_TIMESTAMP)
+				`INSERT INTO processed_webhooks(provider, event_id, status, created_at, claim_token)
+				 VALUES(?1, ?2, 'processing', CURRENT_TIMESTAMP, ?3)
 				 ON CONFLICT(provider, event_id) DO UPDATE SET
 				   status = 'processing',
 				   error = NULL,
 				   created_at = CURRENT_TIMESTAMP,
-				   completed_at = NULL
+				   completed_at = NULL,
+				   claim_token = excluded.claim_token
 				 WHERE processed_webhooks.status = 'failed'
 				    OR (
 				      processed_webhooks.status = 'processing'
-				      AND processed_webhooks.created_at < datetime('now', '-15 minutes')
+				      AND (
+				        processed_webhooks.claim_token = excluded.claim_token
+				        OR processed_webhooks.created_at < datetime('now', '-15 minutes')
+				      )
 				    )
-				 RETURNING 1 AS claimed`,
+				 RETURNING claim_token`,
 			)
-				.bind(provider, eventId)
-				.first<{ claimed: number }>(),
+				.bind(provider, eventId, claimToken)
+				.first<{ claim_token: string }>(),
 		'claimWebhookEvent',
 	);
-	return claimed?.claimed === 1;
+	return claimed?.claim_token === claimToken ? claimToken : null;
 }
 
-export async function completeWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string): Promise<void> {
-	await withD1Retry(
+export async function completeWebhookEvent(
+	env: DatabaseEnv,
+	provider: WebhookProvider,
+	eventId: string,
+	claimToken: string,
+): Promise<void> {
+	const result = await withD1Retry(
 		() =>
 			env.DB.prepare(
 				`UPDATE processed_webhooks
-				    SET status = 'completed', error = NULL, completed_at = CURRENT_TIMESTAMP
-				  WHERE provider = ?1 AND event_id = ?2`,
+				    SET status = 'completed', error = NULL, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+				  WHERE provider = ?1
+				    AND event_id = ?2
+				    AND claim_token = ?3
+				    AND status IN ('processing', 'completed')`,
 			)
-				.bind(provider, eventId)
+				.bind(provider, eventId, claimToken)
 				.run(),
 		'completeWebhookEvent',
 	);
+	if (Number(result.meta.changes || 0) !== 1) throw new Error('Webhook event claim lost before completion');
 }
 
-export async function failWebhookEvent(env: DatabaseEnv, provider: WebhookProvider, eventId: string, error: unknown): Promise<void> {
+export async function failWebhookEvent(
+	env: DatabaseEnv,
+	provider: WebhookProvider,
+	eventId: string,
+	claimToken: string,
+	error: unknown,
+): Promise<void> {
 	const message = errorMessage(error).replace(/\s+/g, ' ').trim().slice(0, 500) || 'Unknown error';
 	await withD1Retry(
 		() =>
 			env.DB.prepare(
 				`UPDATE processed_webhooks
-				    SET status = 'failed', error = ?3, completed_at = CURRENT_TIMESTAMP
-				  WHERE provider = ?1 AND event_id = ?2`,
+				    SET status = 'failed', error = ?4, completed_at = CURRENT_TIMESTAMP
+				  WHERE provider = ?1 AND event_id = ?2 AND claim_token = ?3 AND status = 'processing'`,
 			)
-				.bind(provider, eventId, message)
+				.bind(provider, eventId, claimToken, message)
 				.run(),
 		'failWebhookEvent',
 	);
