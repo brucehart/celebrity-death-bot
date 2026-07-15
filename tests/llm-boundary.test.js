@@ -18,7 +18,7 @@ const rejectedRow = {
 	wiki_path: 'Rejected_Person',
 };
 
-function makeEnv({ deathRows = [canonicalRow], failSubscriberRead = false } = {}) {
+function makeEnv({ deathRows = [canonicalRow], subscriberRows = [], failSubscriberRead = false } = {}) {
 	const writes = [];
 	const reads = [];
 	const DB = {
@@ -31,7 +31,7 @@ function makeEnv({ deathRows = [canonicalRow], failSubscriberRead = false } = {}
 							if (sql.includes('FROM deaths')) return { results: deathRows };
 							if (sql.includes('FROM subscribers')) {
 								if (failSubscriberRead) throw new Error('notification lookup failed');
-								return { results: [] };
+								return { results: subscriberRows };
 							}
 							return { results: [] };
 						},
@@ -47,7 +47,7 @@ function makeEnv({ deathRows = [canonicalRow], failSubscriberRead = false } = {}
 			return Promise.all(statements.map((statement) => statement.run()));
 		},
 	};
-	return { env: { DB }, reads, writes };
+	return { env: { DB, TELEGRAM_BOT_TOKEN: 'test-token' }, reads, writes };
 }
 
 test('LLM output is rejected without a trusted candidate set', async () => {
@@ -63,24 +63,75 @@ test('LLM cannot select a wiki path outside the candidate batch', async () => {
 	assert.equal(writes.length, 0);
 });
 
-test('selected notifications and updates use canonical database fields', async () => {
-	const { env, writes } = makeEnv();
+test('selected notifications keep canonical identity and use validated LLM presentation fields', async () => {
+	const { env, writes } = makeEnv({ subscriberRows: [{ type: 'telegram', chat_id: '123', enabled: 1 }] });
+	const requests = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (input, init) => {
+		requests.push({ input, init });
+		return Response.json({ ok: true });
+	};
 	let fencedAfterUpdate = false;
+	let result;
+	try {
+		result = await applyLlmOutput(
+			env,
+			JSON.stringify({
+				selected: [
+					{
+						name: '<script>evil</script>',
+						age: 1,
+						wiki_path: 'Trusted_Person',
+						description: 'Influential performer whose acclaimed film and television work reached a broad American audience.',
+						cause_of_death: 'heart failure',
+					},
+				],
+				rejected: [],
+			}),
+			['Trusted_Person'],
+			{
+				beforeSideEffects: async () => {
+					fencedAfterUpdate = writes.some((write) => write.sql.includes("llm_result = 'yes'"));
+				},
+			},
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+	assert.equal(result.notified, 1);
+	assert.equal(fencedAfterUpdate, true);
+	const update = writes.find((write) => write.sql.includes("llm_result = 'yes'"));
+	assert.deepEqual(update.values, [
+		'heart failure',
+		'Influential performer whose acclaimed film and television work reached a broad American audience.',
+		'Trusted_Person',
+	]);
+	assert.equal(requests.length, 1);
+	const telegramBody = JSON.parse(String(requests[0].init.body));
+	assert.match(telegramBody.text, /Trusted Person/);
+	assert.doesNotMatch(telegramBody.text, /evil/);
+	assert.doesNotMatch(telegramBody.text, /\(1\)/);
+	assert.match(telegramBody.text, /Influential performer/);
+	assert.match(telegramBody.text, /heart failure/);
+});
+
+test('invalid generated presentation fields fall back to canonical database values', async () => {
+	const { env, writes } = makeEnv();
 	const result = await applyLlmOutput(
 		env,
 		JSON.stringify({
-			selected: [{ name: '<script>evil</script>', wiki_path: 'Trusted_Person', description: 'fabricated', cause: 'fabricated' }],
+			selected: [
+				{
+					wiki_path: 'Trusted_Person',
+					description: '<script>alert(1)</script>',
+					cause_of_death: '<b>fabricated</b>',
+				},
+			],
 			rejected: [],
 		}),
 		['Trusted_Person'],
-		{
-			beforeSideEffects: async () => {
-				fencedAfterUpdate = writes.some((write) => write.sql.includes("llm_result = 'yes'"));
-			},
-		},
 	);
 	assert.equal(result.notified, 1);
-	assert.equal(fencedAfterUpdate, true);
 	const update = writes.find((write) => write.sql.includes("llm_result = 'yes'"));
 	assert.deepEqual(update.values, ['canonical cause', 'Canonical Wikipedia description', 'Trusted_Person']);
 });

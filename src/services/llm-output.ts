@@ -16,6 +16,10 @@ type ApplyLlmOutputOptions = {
 };
 
 const MAX_REASON_CHARS = 200;
+const MAX_GENERATED_DESCRIPTION_CHARS = 500;
+const MAX_GENERATED_CAUSE_CHARS = 200;
+const GENERATED_TEXT_CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const GENERATED_TEXT_HTML_TAG_RE = /<\/?[a-z][^>]*>/i;
 
 function normalizeRejected(raw: SelectedRejected['rejected'], candidateMap: Map<string, string>): Rejection[] {
 	const out: Rejection[] = [];
@@ -49,6 +53,27 @@ function sanitizeReason(value: unknown): string | null {
 	const trimmed = raw.replace(/\s+/g, ' ').trim();
 	if (!trimmed) return null;
 	return trimmed.slice(0, MAX_REASON_CHARS);
+}
+
+function sanitizeGeneratedText(value: unknown, maxChars: number): string | null {
+	if (typeof value !== 'string') return null;
+	const normalized = value.replace(/\s+/g, ' ').trim();
+	if (!normalized || normalized.length > maxChars) return null;
+	if (GENERATED_TEXT_CONTROL_RE.test(normalized) || GENERATED_TEXT_HTML_TAG_RE.test(normalized)) return null;
+	return normalized;
+}
+
+function applyGeneratedPresentation(canonical: DeathEntry, selected: Record<string, unknown>): DeathEntry {
+	const description = sanitizeGeneratedText(selected['description'], MAX_GENERATED_DESCRIPTION_CHARS);
+	const cause = sanitizeGeneratedText(
+		selected['cause of death'] ?? selected['cause_of_death'] ?? selected['causeOfDeath'] ?? selected['cause'],
+		MAX_GENERATED_CAUSE_CHARS,
+	);
+	return {
+		...canonical,
+		description: description ?? canonical.description,
+		cause: cause ?? canonical.cause,
+	};
 }
 
 function normalizeWikiPath(value: unknown): string {
@@ -211,8 +236,19 @@ export async function applyLlmOutput(env: Env, outputText: string, candidatePath
 		}
 	}
 
-	const selectedPaths = Array.from(new Set(selectedItems.map((item) => readWikiPath(item, candidateMap)).filter(Boolean)));
-	const selectedRows = selectedPaths.map((wikiPath) => rowsByPath.get(wikiPath)).filter((row): row is DeathEntry => Boolean(row));
+	const selectedItemsByPath = new Map<string, Record<string, unknown>>();
+	for (const item of selectedItems) {
+		const wikiPath = readWikiPath(item, candidateMap);
+		if (wikiPath && !selectedItemsByPath.has(wikiPath)) selectedItemsByPath.set(wikiPath, item);
+	}
+	const selectedPaths = Array.from(selectedItemsByPath.keys());
+	const selectedRows = selectedPaths
+		.map((wikiPath) => {
+			const canonical = rowsByPath.get(wikiPath);
+			const selected = selectedItemsByPath.get(wikiPath);
+			return canonical && selected ? applyGeneratedPresentation(canonical, selected) : null;
+		})
+		.filter((row): row is DeathEntry => Boolean(row));
 	let filteredRejections: Rejection[] = [];
 	if (rejectedItems.length) {
 		const selectedSet = new Set(selectedPaths);
