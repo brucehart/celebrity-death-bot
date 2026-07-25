@@ -4,6 +4,8 @@ import { getConfig } from '../config.ts';
 import { MAX_PROVIDER_RESPONSE_BYTES, readResponseTextBounded } from '../utils/request.ts';
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
+const OPENAI_FETCH_RETRIES = 3;
+const OPENAI_RETRY_BACKOFF_MS = 1_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -92,7 +94,7 @@ export async function callOpenAI(env: Env, prompt: string, opts?: OpenAIRequestO
 			},
 			body: JSON.stringify(body),
 		},
-		{ retries: 1, timeoutMs },
+		{ retries: OPENAI_FETCH_RETRIES, backoffMs: OPENAI_RETRY_BACKOFF_MS, timeoutMs, service: 'OpenAI Responses API' },
 	);
 
 	if (!res.ok) {
@@ -127,7 +129,7 @@ export async function retrieveOpenAIResponse(env: Env, responseId: string) {
 				'Content-Type': 'application/json',
 			},
 		},
-		{ retries: 1, timeoutMs },
+		{ retries: OPENAI_FETCH_RETRIES, backoffMs: OPENAI_RETRY_BACKOFF_MS, timeoutMs, service: 'OpenAI Responses API' },
 	);
 
 	if (!res.ok) {
