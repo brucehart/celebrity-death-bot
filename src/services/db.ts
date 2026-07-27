@@ -180,6 +180,182 @@ export async function markDeathsAsError(env: Env, wikiPaths: string[]) {
 export type WebhookProvider = 'replicate' | 'openai' | 'telegram';
 type DatabaseEnv = Pick<Env, 'DB'>;
 
+export type OpenAIBackgroundResponse = {
+	response_id: string;
+	candidate_paths_json: string;
+	status: string;
+	submitted_at: string;
+	last_checked_at: string | null;
+	completed_at: string | null;
+	error: string | null;
+};
+
+function normalizeCandidatePaths(candidatePaths: string[]): string[] {
+	return Array.from(
+		new Set(
+			(candidatePaths || [])
+				.map((path) => String(path || '').trim())
+				.filter((path) => path.length > 0 && path.length <= 512)
+				.slice(0, 400),
+		),
+	);
+}
+
+export function parseOpenAICandidatePaths(raw: string): string[] {
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return Array.isArray(parsed) ? normalizeCandidatePaths(parsed.map((path) => String(path || ''))) : [];
+	} catch {
+		return [];
+	}
+}
+
+export async function recordOpenAIBackgroundResponse(
+	env: DatabaseEnv,
+	responseId: string,
+	candidatePaths: string[],
+	status: string,
+): Promise<void> {
+	const normalizedId = String(responseId || '').trim();
+	const candidates = normalizeCandidatePaths(candidatePaths);
+	if (!normalizedId || normalizedId.length > 200) throw new Error('OpenAI background response id is invalid');
+	if (!candidates.length) throw new Error('OpenAI background response has no candidate paths');
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`INSERT INTO openai_background_responses(response_id, candidate_paths_json, status)
+				 VALUES(?1, ?2, ?3)
+				 ON CONFLICT(response_id) DO UPDATE SET
+				   candidate_paths_json = excluded.candidate_paths_json,
+				   status = CASE
+				     WHEN openai_background_responses.completed_at IS NULL THEN excluded.status
+				     ELSE openai_background_responses.status
+				   END`,
+			)
+				.bind(normalizedId, JSON.stringify(candidates), String(status || 'queued').trim() || 'queued')
+				.run(),
+		'recordOpenAIBackgroundResponse',
+	);
+}
+
+export async function listPendingOpenAIBackgroundResponses(env: DatabaseEnv, limit = 100): Promise<OpenAIBackgroundResponse[]> {
+	const capped = Math.min(Math.max(Math.floor(Number(limit) || 100), 1), 400);
+	const result = await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`SELECT response_id, candidate_paths_json, status, submitted_at, last_checked_at, completed_at, error
+				   FROM openai_background_responses
+				  WHERE completed_at IS NULL
+				  ORDER BY submitted_at ASC
+				  LIMIT ?1`,
+			)
+				.bind(capped)
+				.all<OpenAIBackgroundResponse>(),
+		'listPendingOpenAIBackgroundResponses',
+	);
+	return result.results || [];
+}
+
+export async function getOpenAIBackgroundResponse(env: DatabaseEnv, responseId: string): Promise<OpenAIBackgroundResponse | null> {
+	return withD1Retry(
+		() =>
+			env.DB.prepare(
+				`SELECT response_id, candidate_paths_json, status, submitted_at, last_checked_at, completed_at, error
+				   FROM openai_background_responses
+				  WHERE response_id = ?1`,
+			)
+				.bind(responseId)
+				.first<OpenAIBackgroundResponse>(),
+		'getOpenAIBackgroundResponse',
+	);
+}
+
+export async function getActiveOpenAICandidatePaths(env: DatabaseEnv): Promise<string[]> {
+	const result = await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`SELECT candidate_paths_json
+				   FROM openai_background_responses
+				  WHERE completed_at IS NULL
+				  ORDER BY submitted_at ASC
+				  LIMIT 400`,
+			).all<{ candidate_paths_json: string }>(),
+		'getActiveOpenAICandidatePaths',
+	);
+	const paths = new Set<string>();
+	for (const row of result.results || []) {
+		for (const path of parseOpenAICandidatePaths(row.candidate_paths_json)) paths.add(path);
+	}
+	return Array.from(paths);
+}
+
+export async function updateOpenAIBackgroundResponseCheck(
+	env: DatabaseEnv,
+	responseId: string,
+	status: string,
+	error?: unknown,
+): Promise<void> {
+	const message = error == null ? null : errorMessage(error).replace(/\s+/g, ' ').trim().slice(0, 500) || 'Unknown error';
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`UPDATE openai_background_responses
+				    SET status = ?2, last_checked_at = CURRENT_TIMESTAMP, error = ?3
+				  WHERE response_id = ?1 AND completed_at IS NULL`,
+			)
+				.bind(responseId, String(status || 'unknown').trim() || 'unknown', message)
+				.run(),
+		'updateOpenAIBackgroundResponseCheck',
+	);
+}
+
+export async function completeOpenAIBackgroundResponse(env: DatabaseEnv, responseId: string, status: string): Promise<void> {
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`UPDATE openai_background_responses
+				    SET status = ?2,
+				        last_checked_at = CURRENT_TIMESTAMP,
+				        completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+				        error = NULL
+				  WHERE response_id = ?1`,
+			)
+				.bind(responseId, String(status || 'completed').trim() || 'completed')
+				.run(),
+		'completeOpenAIBackgroundResponse',
+	);
+}
+
+export async function getWebhookEventStatus(
+	env: DatabaseEnv,
+	provider: WebhookProvider,
+	eventId: string,
+): Promise<'processing' | 'completed' | 'failed' | null> {
+	const row = await withD1Retry(
+		() =>
+			env.DB.prepare(`SELECT status FROM processed_webhooks WHERE provider = ?1 AND event_id = ?2`)
+				.bind(provider, eventId)
+				.first<{ status: 'processing' | 'completed' | 'failed' }>(),
+		'getWebhookEventStatus',
+	);
+	return row?.status ?? null;
+}
+
+export async function pruneOpenAIBackgroundResponses(env: DatabaseEnv): Promise<void> {
+	await withD1Retry(
+		() =>
+			env.DB.prepare(
+				`DELETE FROM openai_background_responses
+				  WHERE response_id IN (
+				    SELECT response_id FROM openai_background_responses
+				     WHERE completed_at < datetime('now', '-90 days')
+				     LIMIT 500
+				  )`,
+			).run(),
+		'pruneOpenAIBackgroundResponses',
+	);
+}
+
 /**
  * Atomically claims a provider delivery. A false result means the delivery was
  * completed or is still being processed and must not perform side effects

@@ -1,38 +1,10 @@
 import type { Env } from '../types.ts';
-import { applyLlmOutput } from '../services/llm-output.ts';
-import { retrieveOpenAIResponse } from '../services/openai.ts';
-import { claimWebhookEvent, completeWebhookEvent, failWebhookEvent, markDeathsAsError } from '../services/db.ts';
+import { processOpenAIResponseEvent, type OpenAIResponseEventType } from '../services/openai-background.ts';
 import { verifyOpenAIWebhook } from '../utils/openai-webhook.ts';
 import { BodyTooLargeError, MAX_WEBHOOK_BODY_BYTES, readRequestTextBounded } from '../utils/request.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function extractCandidatesFromMetadata(metadata: unknown): string[] {
-	if (!isRecord(metadata)) return [];
-	const raw = metadata.candidates;
-	if (Array.isArray(raw)) {
-		return raw
-			.map((value) => String(value || '').trim())
-			.filter((path) => path.length > 0 && path.length <= 512)
-			.slice(0, 400);
-	}
-	if (typeof raw !== 'string') return [];
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (Array.isArray(parsed)) {
-			return parsed
-				.map((value) => String(value || '').trim())
-				.filter((path) => path.length > 0 && path.length <= 512)
-				.slice(0, 400);
-		}
-	} catch {}
-	return raw
-		.split(',')
-		.map((value) => value.trim())
-		.filter((path) => path.length > 0 && path.length <= 512)
-		.slice(0, 400);
 }
 
 export async function openaiWebhook(request: Request, env: Env): Promise<Response> {
@@ -66,40 +38,10 @@ export async function openaiWebhook(request: Request, env: Env): Promise<Respons
 	const responseId = data && typeof data.id === 'string' && data.id.length <= 200 ? data.id.trim() : '';
 	if (!responseId) return new Response('Missing response id', { status: 400 });
 
-	const eventId = `${responseId}:${eventType}`;
-	let claimToken: string;
 	try {
-		const claimed = await claimWebhookEvent(env, 'openai', eventId);
-		if (!claimed) return Response.json({ ok: true, duplicate: true });
-		claimToken = claimed;
-	} catch (error) {
-		console.error('OpenAI webhook claim failed', error instanceof Error ? error.message : String(error));
-		return new Response('Webhook processing failed', { status: 500 });
-	}
-
-	try {
-		const response = await retrieveOpenAIResponse(env, responseId);
-		const metadata = isRecord(response.raw) ? response.raw.metadata : null;
-		const candidatePaths = extractCandidatesFromMetadata(metadata);
-
-		if (eventType !== 'response.completed') {
-			if (candidatePaths.length) await markDeathsAsError(env, candidatePaths);
-			await completeWebhookEvent(env, 'openai', eventId, claimToken);
-			return Response.json({ ok: true, status: eventType, errored: candidatePaths.length });
-		}
-
-		const result = await applyLlmOutput(env, response.outputText || '', candidatePaths, {
-			beforeSideEffects: () => completeWebhookEvent(env, 'openai', eventId, claimToken),
-		});
-		await completeWebhookEvent(env, 'openai', eventId, claimToken);
-		return Response.json({ ok: true, response_id: responseId, ...result });
+		return Response.json(await processOpenAIResponseEvent(env, eventType as OpenAIResponseEventType, responseId));
 	} catch (error) {
 		console.error('OpenAI webhook processing failed', error instanceof Error ? error.message : String(error));
-		try {
-			await failWebhookEvent(env, 'openai', eventId, claimToken, error);
-		} catch (recordError) {
-			console.error('OpenAI webhook failure recording failed', recordError instanceof Error ? recordError.message : String(recordError));
-		}
 		return new Response('Webhook processing failed', { status: 500 });
 	}
 }

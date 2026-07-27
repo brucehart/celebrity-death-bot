@@ -17,6 +17,7 @@ import { llmDebug } from './routes/llm-debug.ts';
 import { login, logout, oauthCallback } from './routes/auth.ts';
 import { alertOnJobError, alertOnJobResult } from './services/alerts.ts';
 import { withSecurityHeaders } from './utils/response.ts';
+import { pollOpenAIBackgroundResponses } from './services/openai-background.ts';
 
 const router = new Router()
 	.on('POST', '/replicate/callback', (req, env) => replicateCallback(req, env))
@@ -43,6 +44,8 @@ export default {
 		ctx.waitUntil(
 			(async () => {
 				try {
+					const polling = await pollOpenAIBackgroundResponses(env);
+					console.log('OpenAI background polling complete', polling);
 					const res = await runJob(env);
 					console.log('Job complete', res);
 					await alertOnJobResult(env, res);

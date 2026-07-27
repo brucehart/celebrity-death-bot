@@ -1,6 +1,13 @@
 import type { Env, DeathEntry } from '../types.ts';
 import { toNYYear, parseWikipedia } from './wiki.ts';
-import { insertBatchReturningNew, pruneWebhookEvents, selectDeathsByIds, selectDeathsByWikiPaths, selectPendingDeaths } from './db.ts';
+import {
+	getActiveOpenAICandidatePaths,
+	insertBatchReturningNew,
+	pruneWebhookEvents,
+	selectDeathsByIds,
+	selectDeathsByWikiPaths,
+	selectPendingDeaths,
+} from './db.ts';
 import { evaluateDeaths, getDefaultLlmProvider, normalizeLlmProvider } from './llm.ts';
 import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
@@ -184,6 +191,9 @@ export async function runPending(
 	const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : drain ? Number.POSITIVE_INFINITY : 120;
 	const maxTotal = provider === 'replicate' && Number.isFinite(limit) ? Math.min(limit, 400) : limit;
 	const excludeSet = new Set((opts?.excludePaths || []).map((s) => String(s || '').trim()).filter(Boolean));
+	if (provider === 'openai') {
+		for (const path of await getActiveOpenAICandidatePaths(env)) excludeSet.add(path);
+	}
 
 	const CHUNK = provider === 'openai' ? 20 : 30;
 	let queued = 0;

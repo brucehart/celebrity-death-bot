@@ -2,16 +2,21 @@ import type { Env, DeathEntry } from '../types.ts';
 import { applyLlmOutput } from './llm-output.ts';
 import { callOpenAI, DEFAULT_OPENAI_MODEL, normalizeOpenAIModel } from './openai.ts';
 import { buildReplicatePrompt, callReplicate, DEFAULT_REPLICATE_MODEL } from './replicate.ts';
+import { recordOpenAIBackgroundResponse } from './db.ts';
 
 export type LlmProvider = 'openai' | 'replicate';
 
 export function getDefaultLlmProvider(env: Env): LlmProvider {
-	const raw = String(env.LLM_PROVIDER || '').trim().toLowerCase();
+	const raw = String(env.LLM_PROVIDER || '')
+		.trim()
+		.toLowerCase();
 	return raw === 'replicate' ? 'replicate' : 'openai';
 }
 
 export function normalizeLlmProvider(raw: string | undefined, fallback: LlmProvider): LlmProvider {
-	const trimmed = String(raw || '').trim().toLowerCase();
+	const trimmed = String(raw || '')
+		.trim()
+		.toLowerCase();
 	if (trimmed === 'replicate') return 'replicate';
 	if (trimmed === 'openai') return 'openai';
 	return fallback;
@@ -34,7 +39,7 @@ export function normalizeModelForProvider(provider: LlmProvider, raw?: string): 
 export async function evaluateDeaths(
 	env: Env,
 	entries: DeathEntry[],
-	opts?: { forcedPaths?: string[]; model?: string; provider?: LlmProvider | string }
+	opts?: { forcedPaths?: string[]; model?: string; provider?: LlmProvider | string },
 ) {
 	if (!entries.length) return { provider: getDefaultLlmProvider(env), queued: 0, mode: 'skipped' } as const;
 	const provider = normalizeLlmProvider(opts?.provider, getDefaultLlmProvider(env));
@@ -52,6 +57,9 @@ export async function evaluateDeaths(
 	const metadata = candidatePaths.length ? { candidates: JSON.stringify(candidatePaths) } : undefined;
 	const { outputText, id, status } = await callOpenAI(env, prompt, { model, background: useBackground, metadata });
 	if (useBackground) {
+		if (!id) throw new Error('OpenAI background response did not include an id');
+		await recordOpenAIBackgroundResponse(env, id, candidatePaths, status || 'queued');
+		console.log('OpenAI background response queued', { responseId: id, status: status || 'queued', candidates: candidatePaths.length });
 		return { provider, queued: entries.length, mode: 'queued', model, response_id: id, status } as const;
 	}
 	const applied = await applyLlmOutput(env, outputText, candidatePaths);
