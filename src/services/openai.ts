@@ -3,7 +3,7 @@ import { fetchWithRetry } from '../utils/fetch.ts';
 import { getConfig } from '../config.ts';
 import { MAX_PROVIDER_RESPONSE_BYTES, readResponseTextBounded } from '../utils/request.ts';
 
-export const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-luna';
 const OPENAI_FETCH_RETRIES = 3;
 const OPENAI_RETRY_BACKOFF_MS = 1_000;
 
