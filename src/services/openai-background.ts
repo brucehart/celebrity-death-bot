@@ -23,6 +23,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizedErrorField(value: unknown): string | null {
+	if (typeof value !== 'string' && typeof value !== 'number') return null;
+	return String(value).replace(/\s+/g, ' ').trim() || null;
+}
+
+export function formatOpenAIResponseError(raw: unknown): string | null {
+	if (!isRecord(raw)) return null;
+	const responseError = raw.error;
+	if (typeof responseError === 'string') return normalizedErrorField(responseError)?.slice(0, 500) || null;
+	if (!isRecord(responseError)) return null;
+
+	const fields = [
+		['code', normalizedErrorField(responseError.code)],
+		['type', normalizedErrorField(responseError.type)],
+		['message', normalizedErrorField(responseError.message)],
+	] as const;
+	const parts: string[] = [];
+	for (const [name, value] of fields) {
+		if (value !== null) parts.push(`${name}=${value}`);
+	}
+	const message = parts.join('; ');
+	return message.slice(0, 500) || null;
+}
+
 export function extractOpenAICandidatesFromMetadata(metadata: unknown): string[] {
 	if (!isRecord(metadata)) return [];
 	const raw = metadata.candidates;
@@ -64,11 +88,12 @@ export async function processOpenAIResponseEvent(
 	retrievedResponse?: RetrievedOpenAIResponse,
 ) {
 	const eventId = `${responseId}:${eventType}`;
+	const responseError = retrievedResponse ? formatOpenAIResponseError(retrievedResponse.raw) : null;
 	const claimed = await claimWebhookEvent(env, 'openai', eventId);
 	if (!claimed) {
 		const ledgerStatus = await getWebhookEventStatus(env, 'openai', eventId);
 		if (ledgerStatus === 'completed') {
-			await completeOpenAIBackgroundResponse(env, responseId, eventType.slice('response.'.length));
+			await completeOpenAIBackgroundResponse(env, responseId, eventType.slice('response.'.length), responseError);
 		}
 		return { ok: true, duplicate: true } as const;
 	}
@@ -78,9 +103,19 @@ export async function processOpenAIResponseEvent(
 		const candidatePaths = await getTrustedCandidatePaths(env, responseId, response);
 
 		if (eventType !== 'response.completed') {
+			const terminalError =
+				formatOpenAIResponseError(response.raw) ||
+				(eventType === 'response.failed' ? 'OpenAI response failed without provider error details' : null);
+			if (eventType === 'response.failed') {
+				console.error('OpenAI background response failed', {
+					responseId,
+					status: eventType,
+					error: terminalError,
+				});
+			}
 			if (candidatePaths.length) await markDeathsAsError(env, candidatePaths);
 			await completeWebhookEvent(env, 'openai', eventId, claimed);
-			await completeOpenAIBackgroundResponse(env, responseId, eventType.slice('response.'.length));
+			await completeOpenAIBackgroundResponse(env, responseId, eventType.slice('response.'.length), terminalError);
 			return { ok: true, status: eventType, errored: candidatePaths.length } as const;
 		}
 

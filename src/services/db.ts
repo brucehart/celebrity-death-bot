@@ -309,7 +309,14 @@ export async function updateOpenAIBackgroundResponseCheck(
 	);
 }
 
-export async function completeOpenAIBackgroundResponse(env: DatabaseEnv, responseId: string, status: string): Promise<void> {
+export async function completeOpenAIBackgroundResponse(
+	env: DatabaseEnv,
+	responseId: string,
+	status: string,
+	error?: unknown,
+): Promise<void> {
+	const normalizedStatus = String(status || 'completed').trim() || 'completed';
+	const message = error == null ? null : errorMessage(error).replace(/\s+/g, ' ').trim().slice(0, 500) || 'Unknown error';
 	await withD1Retry(
 		() =>
 			env.DB.prepare(
@@ -317,10 +324,14 @@ export async function completeOpenAIBackgroundResponse(env: DatabaseEnv, respons
 				    SET status = ?2,
 				        last_checked_at = CURRENT_TIMESTAMP,
 				        completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
-				        error = NULL
+				        error = CASE
+				          WHEN ?2 = 'completed' THEN NULL
+				          WHEN ?3 IS NOT NULL THEN ?3
+				          ELSE error
+				        END
 				  WHERE response_id = ?1`,
 			)
-				.bind(responseId, String(status || 'completed').trim() || 'completed')
+				.bind(responseId, normalizedStatus, message)
 				.run(),
 		'completeOpenAIBackgroundResponse',
 	);

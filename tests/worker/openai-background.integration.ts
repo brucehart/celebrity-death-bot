@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Env } from '../../src/types.ts';
 import { getActiveOpenAICandidatePaths, getOpenAIBackgroundResponse, recordOpenAIBackgroundResponse } from '../../src/services/db.ts';
@@ -29,6 +29,24 @@ function completedResponse() {
 			id: responseId,
 			status: 'completed',
 			metadata: { candidates: JSON.stringify([candidatePath]) },
+		},
+	};
+}
+
+function failedResponse() {
+	return {
+		id: responseId,
+		status: 'failed',
+		outputText: '',
+		raw: {
+			id: responseId,
+			status: 'failed',
+			metadata: { candidates: JSON.stringify([candidatePath]) },
+			error: {
+				code: 'insufficient_quota',
+				type: 'insufficient_quota',
+				message: 'Credit balance exhausted.\nAdd credits and retry.',
+			},
 		},
 	};
 }
@@ -91,5 +109,38 @@ describe('OpenAI background response polling', () => {
 
 		const retry = await runPending(testEnv, { provider: 'openai', limit: 20 });
 		expect(retry.queued).toBe(0);
+	});
+
+	it('persists and logs a failed response error without letting duplicate delivery erase it', async () => {
+		await recordOpenAIBackgroundResponse(testEnv, responseId, [candidatePath], 'queued');
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		try {
+			const polling = await pollOpenAIBackgroundResponses(testEnv, {
+				retrieve: async () => failedResponse(),
+			});
+
+			expect(polling).toEqual({ checked: 1, active: 0, completed: 0, failed: 1, errors: 0 });
+			const expectedError = 'code=insufficient_quota; type=insufficient_quota; message=Credit balance exhausted. Add credits and retry.';
+			const tracked = await getOpenAIBackgroundResponse(testEnv, responseId);
+			expect(tracked?.status).toBe('failed');
+			expect(tracked?.completed_at).toBeTruthy();
+			expect(tracked?.error).toBe(expectedError);
+			const death = await env.DB.prepare('SELECT llm_result FROM deaths WHERE wiki_path = ?1')
+				.bind(candidatePath)
+				.first<{ llm_result: string }>();
+			expect(death?.llm_result).toBe('error');
+			expect(consoleError).toHaveBeenCalledWith('OpenAI background response failed', {
+				responseId,
+				status: 'response.failed',
+				error: expectedError,
+			});
+
+			const lateWebhook = await processOpenAIResponseEvent(testEnv, 'response.failed', responseId, failedResponse());
+			expect(lateWebhook).toEqual({ ok: true, duplicate: true });
+			expect((await getOpenAIBackgroundResponse(testEnv, responseId))?.error).toBe(expectedError);
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 });
