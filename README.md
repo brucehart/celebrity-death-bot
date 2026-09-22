@@ -142,7 +142,7 @@ npm run deploy
       -d '{"retry_pending":true,"pending_limit":150}' \
       https://<your-worker>/run
     ```
-  - **Use a different provider/model (full run, retry, or targeted reprocess):** Include `provider` in the JSON body to switch between `openai` and `replicate`. OpenAI defaults to `gpt-5.6-luna`; use model IDs like `gpt-5.6-luna` for explicit overrides. For Replicate, use model paths like `openai/gpt-5-mini` or `google/gemini-3-pro`.
+  - **Use a different provider/model (full run, retry, or targeted reprocess):** Include `provider` in the JSON body to switch between `openai` and `replicate`. OpenAI defaults to `gpt-6-luna`; use model IDs like `gpt-6-luna` for explicit overrides. For Replicate, use model paths like `openai/gpt-5-mini` or `google/gemini-3-pro`.
     ```bash
     curl -X POST \
       -H "Authorization: Bearer $MANUAL_RUN_SECRET" \
